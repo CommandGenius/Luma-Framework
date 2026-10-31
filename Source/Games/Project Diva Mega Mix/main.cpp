@@ -137,7 +137,6 @@ namespace Installation // support for mod manager's config.toml
       // paths
       auto GetThisModulePath = [](HMODULE hModule) -> std::filesystem::path
       {
-         ASSERT_ONCE_MSG(hModule != nullptr, "hModule is null");
          wchar_t path[MAX_PATH] = {};
          GetModuleFileNameW(hModule, path, MAX_PATH);
          return std::filesystem::path(path).parent_path();
@@ -205,7 +204,7 @@ namespace RenderTracker // partial
    ComPtr<ID3D11Resource> res_main_ui; // rgba16f (orig rgba8) that ui draws to
    ComPtr<ID3D11Texture2D> res_main_ui_tex;
    uint64_t res_main_ui_handle = 0;
-   uint2 res_main_ui_size = {}; // should be same as color
+   uint2 res_main_ui_size = {}; // can be like 8px off from main
 
    void Reset_Handles()
    {
@@ -435,36 +434,6 @@ namespace ShaderHashesLists
    constexpr uint32_t ToSwapchain = 0xA200B172;
 }
 
-// namespace UISeparation //TODO: del, compeltely broken
-// {
-//    //UI transparency TODO: use ComPtr
-//    com_ptr<ID3D11Texture2D> UIOutputTexOrig = nullptr; 
-//    
-//    com_ptr<ID3D11Texture2D> UIOutputTex = nullptr;
-//    D3D11_TEXTURE2D_DESC UIOutputTexDesc;
-//    
-//    com_ptr<ID3D11RenderTargetView> UIOutputRtv = nullptr;
-//    D3D11_RENDER_TARGET_VIEW_DESC UIOutputRtvDesc;
-//    
-//    com_ptr<ID3D11ShaderResourceView> UIOutputSrv = nullptr;
-//    D3D11_RENDER_TARGET_VIEW_DESC UIOutputSrvDesc;
-//    
-//    bool IsFinalCopyToken = false;
-//
-//    void ResetOnSwapchain()
-//    {
-//       //invalidate
-//       UIOutputTex = nullptr;
-//       UIOutputRtv = nullptr;
-//       UIOutputSrv = nullptr;
-//    }
-//
-//    void ResetOnPresent()
-//    {
-//       IsFinalCopyToken = false;
-//    }
-// }
-
 namespace ShaderDefineInfo
 {
    constexpr uint32_t SWAPCHAIN_TEST_USER_PEAK          = char_ptr_crc32("SWAPCHAIN_TEST_USER_PEAK");
@@ -484,7 +453,6 @@ namespace ShaderDefineInfo
    constexpr uint32_t CUSTOM_HUDBRIGHTNESS              = char_ptr_crc32("CUSTOM_HUDBRIGHTNESS");
    constexpr uint32_t CUSTOM_GAMMA_CORRECTION_MODE      = char_ptr_crc32("CUSTOM_GAMMA_CORRECTION_MODE");
    constexpr uint32_t CUSTOM_GAMMACORRECT22             = char_ptr_crc32("CUSTOM_GAMMACORRECT22");
-   // constexpr uint32_t CUSTOM_UITRANSPARENCY             = char_ptr_crc32("CUSTOM_UITRANSPARENCY");
    constexpr uint32_t CUSTOM_TESTBGSPRITES              = char_ptr_crc32("CUSTOM_TESTBGSPRITES");
    constexpr uint32_t CUSTOM_UPGRADE_DEBUG              = char_ptr_crc32("CUSTOM_UPGRADE_DEBUG");
    constexpr uint32_t CUSTOM_PROGRESSBAR                = char_ptr_crc32("CUSTOM_PROGRESSBAR");
@@ -514,6 +482,7 @@ namespace ShaderDefineInfo
    constexpr uint32_t CUSTOM_DWR_SIGMA                  = char_ptr_crc32("CUSTOM_DWR_SIGMA");
    constexpr uint32_t CUSTOM_SSS_HQBLUR                 = char_ptr_crc32("CUSTOM_SSS_HQBLUR");
    constexpr uint32_t CUSTOM_SSS_EYEDODGE               = char_ptr_crc32("CUSTOM_SSS_EYEDODGE");
+   constexpr uint32_t CUSTOM_SEPARABLEUI                = char_ptr_crc32("CUSTOM_SEPARABLEUI");
 
    void OnInit()
    {
@@ -560,6 +529,7 @@ namespace ShaderDefineInfo
          {"XEGTAO_THREADS_NORMALSSMOOTH", '0', true, false, "XeGTAO compute shader thread groups.", 1},
          {"XEGTAO_THREADS_AO", '1', true, false, "XeGTAO compute shader thread groups.", 1},
          {"XEGTAO_THREADS_DENOISE", '0', true, false, "XeGTAO compute shader thread groups.", 1},
+         {"CUSTOM_SEPARABLEUI", '0', true, false, "UI draws to a separate tex.", 1},
          {"CUSTOM_TESTBGSPRITES", '0', true, false, "Test BG Sprites layering.", 2},
          {"CUSTOM_TONEMAP_IDENTIFY", '0', true, false, "Draw binary representation of tonemap uber variant number.", 1},
          {"CUSTOM_UPSCALE_MOV", '0', true, false, "PumboAutoHDR for FMV.\n0 - Off\n1 - On", 1},
@@ -1382,6 +1352,140 @@ namespace SSAA // detects https://github.com/korenkonder/MMPlusMods/blob/master/
    void OnPresent()
    {
 
+   }
+}
+
+namespace SeparableUI
+{
+   enum State : uint8_t
+   {
+      Final,
+      FirstUIDraw,
+      Swapchain,
+      Done,
+   };
+   State state = Final; // denotes what comes next
+
+   bool IsEnabled() { return ShaderDefineInfo::GetB(ShaderDefineInfo::CUSTOM_SEPARABLEUI); }
+   
+   namespace Resources
+   {
+      ComPtr<ID3D11ShaderResourceView> srv;
+      ComPtr<ID3D11RenderTargetView> rtv;
+
+      void Reset() { srv.reset(); rtv.reset(); }
+      
+      void Create(ID3D11Device* native_device)
+      {
+         // gatekeeps
+         [[likely]] if (srv != nullptr) return;
+         if (RenderTracker::res_main_ui_size.x == 0 || RenderTracker::res_main_ui_size.y == 0) return; // not ready yet
+         
+         // tex
+         ComPtr<ID3D11Texture2D> tex;
+         D3D11_TEXTURE2D_DESC tex_desc = {};
+         tex_desc.Width = RenderTracker::res_main_ui_size.x;
+         tex_desc.Height = RenderTracker::res_main_ui_size.y;
+         tex_desc.MipLevels = 1;
+         tex_desc.ArraySize = 1;
+         tex_desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT; // TODO: 11/10f?
+         tex_desc.SampleDesc.Count = 1;
+         tex_desc.Usage = D3D11_USAGE_DEFAULT;
+         tex_desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+         tex_desc.CPUAccessFlags = 0;
+         tex_desc.MiscFlags = 0;
+         
+         auto hr0 = native_device->CreateTexture2D(&tex_desc, nullptr, tex.put());
+         ASSERT_MSG(SUCCEEDED(hr0), "SeparableUI::Create() hr0");
+
+         auto hr1 = native_device->CreateShaderResourceView(tex.get(), nullptr, srv.put());
+         ASSERT_MSG(SUCCEEDED(hr1), "SeparableUI::Create() hr1");
+
+         auto hr2 = native_device->CreateRenderTargetView(tex.get(), nullptr, rtv.put());
+         ASSERT_MSG(SUCCEEDED(hr2), "SeparableUI::Create() hr2");
+
+         reshade::log::message(reshade::log::level::info, std::format("SeparableUI::Create() Created resources: {}x{}", tex_desc.Width, tex_desc.Height).c_str());
+      }
+   }
+
+   // returns if requires RTV bind
+   ID3D11RenderTargetView* OnDrawFinal(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data)
+   {
+      ID3D11RenderTargetView* result = nullptr;
+      if (!IsEnabled()) return result;
+      if (DEVELOPMENT && !IsModEnabled()) return result;
+
+      // state
+      ASSERT_MSG(state == Final, "SeparableUI::OnDrawFinal() state != Final");
+      state = FirstUIDraw;
+
+      // create resources
+      Resources::Create(native_device);
+
+      // clear
+      constexpr float clear_color[4] = { 0.f, 0.f, 0.f, 1.f };
+      native_device_context->ClearRenderTargetView(Resources::rtv.get(), clear_color);
+
+      result = Resources::rtv.get();
+      return result;
+   }
+   
+   void OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, uint32_t ps)
+   {
+      if (!IsEnabled()) return;
+      if (DEVELOPMENT && !IsModEnabled()) return;
+
+      // state
+      if (state != FirstUIDraw) return;
+      state = Swapchain;
+
+      // ignore if swapchain (case when there's no UI)
+      if (ps == ShaderHashesLists::ToSwapchain) return;
+
+      // replace RTV0-2 (else conflict, as currently bound to RTV2)
+      ComPtr<ID3D11DepthStencilView> dsv; // TODO: remember from prev
+      native_device_context->OMGetRenderTargets(0, nullptr, dsv.put());
+      
+      std::array<ID3D11RenderTargetView*, 3> rtv_array = { Resources::rtv.get(), nullptr, nullptr };
+      native_device_context->OMSetRenderTargets(3, rtv_array.data(), dsv.get());
+   }
+
+   // returns if requires bindings
+   bool OnDrawToSwapchain(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data)
+   {
+      // gatekeep
+      if (!IsEnabled()) return false;
+      if (DEVELOPMENT && !IsModEnabled()) return false;
+
+      // state
+      ASSERT_MSG(state == Swapchain, "SeparableUI::OnDrawSwapchain() state != Swapchain");
+      state = Done;
+
+      // bind SRV1
+      native_device_context->PSSetShaderResources(1, 1, &Resources::srv);
+      
+      return true;
+   }
+   
+   void OnPresent()
+   {
+      ASSERT_MSG(state != Swapchain && state != FirstUIDraw, "SeparableUI::OnPresent() state not resolved");
+      state = Final; // reset
+   }
+   
+   void OnLoad(reshade::api::effect_runtime* runtime)
+   {
+      
+   }
+   
+   void HardReset()
+   {
+      Resources::Reset();
+   }
+
+   void OnInitSwapchain(bool is_resolution_changed)
+   {
+      HardReset();
    }
 }
 
@@ -3939,57 +4043,30 @@ namespace PS4Blur
       }
    }
 
-   void OnDrawFinal(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data)
+   // returns if requires RTV bind
+   ID3D11RenderTargetView* OnDrawFinal(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data)
    {
-      if (!ShaderDefineInfo::GetB(ShaderDefineInfo::CUSTOM_PS4BLUR_1)) return;
-      if (DEVELOPMENT && !IsModEnabled()) return;
+      ID3D11RenderTargetView* result = nullptr;
+      if (!ShaderDefineInfo::GetB(ShaderDefineInfo::CUSTOM_PS4BLUR_1)) return result;
+      if (DEVELOPMENT && !IsModEnabled()) return result;
 
-      // get RTV0 size (because SRV0 can be 2x SSAA!)
-      ComPtr<ID3D11RenderTargetView> rtv0;
-      native_device_context->OMGetRenderTargets(1, rtv0.put(), nullptr);
-      ASSERT_MSG(rtv0 != nullptr, "PS4Blur: RTV0 is null in OnDrawFinal");
-
+      // create resources
       [[unlikely]] if (Resources::size.x == 0)
       {
-         ComPtr<ID3D11Resource> rtv0_resource;
-         rtv0->GetResource(rtv0_resource.put());
-         
-         ComPtr<ID3D11Texture2D> rtv0_texture;
-         auto hr = rtv0_resource->QueryInterface(rtv0_texture.put());
-         ASSERT_MSG(SUCCEEDED(hr), "PS4Blur: OnDrawFinal hr");
-         
-         D3D11_TEXTURE2D_DESC tex_desc;
-         rtv0_texture->GetDesc(&tex_desc);
-
-         // create
-         Resources::Create(native_device, { tex_desc.Width, tex_desc.Height });
+         if (RenderTracker::res_main_ui_size.x == 0 || RenderTracker::res_main_ui_size.y == 0) return result; // wait until ready
+         Resources::Create(native_device, RenderTracker::res_main_ui_size); // slight px offset to SRV is negligible
       }
 
       // bind SRV1 to out new blur result
       native_device_context->PSSetShaderResources(1, 1, !Resources::flipflop ? &Resources::srv0 : &Resources::srv1);
 
       // set RTV to {orig, prev frame}
-      const std::array<ID3D11RenderTargetView*, 2> rtv = { rtv0.get(), !Resources::flipflop ? Resources::rtv1.get() : Resources::rtv0.get() };
-      native_device_context->OMSetRenderTargets(rtv.size(), rtv.data(), nullptr);
-
-      // dual viewport
-      D3D11_VIEWPORT viewports[2];
-      viewports[0].TopLeftX = 0;
-      viewports[0].TopLeftY = 0;
-      viewports[0].Width = static_cast<float>(Resources::size.x);
-      viewports[0].Height = static_cast<float>(Resources::size.y);
-      viewports[0].MinDepth = 0;
-      viewports[0].MaxDepth = 1;
-      viewports[1].TopLeftX = 0;
-      viewports[1].TopLeftY = 0;
-      viewports[1].Width = static_cast<float>(Resources::size.x);
-      viewports[1].Height = static_cast<float>(Resources::size.y);
-      viewports[1].MinDepth = 0;
-      viewports[1].MaxDepth = 1;
-      native_device_context->RSSetViewports(2, viewports);
+      result = !Resources::flipflop ? Resources::rtv1.get() : Resources::rtv0.get();
 
       // ++
       Resources::flipflop = !Resources::flipflop;
+
+      return result;
    }
 
    void HardReset()
@@ -6445,6 +6522,7 @@ public:
    {
       // event
       RenderTracker::OnInitSwapchain();
+      SeparableUI::OnInitSwapchain(is_resolution_changed);
       XeGTAO::OnInitSwapchain(is_resolution_changed);
       SSS::HardReset();
       Bloom::HardReset();
@@ -6586,26 +6664,48 @@ public:
       if (!TonemapInfo::GetDrawnFinal(cb_luma_global_settings.GameSettings.TonemapInfo) &&
          (ps == ShaderHashesLists::Final || SSAA::IsFinalDrawing(native_device, native_device_context, cmd_list_data, device_data, ps)))
       {
-         //drawn
+         // drawn
          cb_luma_global_settings.GameSettings.TonemapInfo = TonemapInfo::SetDrawnFinalTrue(cb_luma_global_settings.GameSettings.TonemapInfo);
          device_data.has_drawn_main_post_processing = true;
          device_data.cb_luma_global_settings_dirty = true;
-
-         // //UI Transparency: IsFinalCopyToken
-         // if (cb_luma_global_settings.GameSettings.UITransparency < 1.f && UISeparation::UIOutputRtv.get() != nullptr)
-         // {
-         //    //give token
-         //    UISeparation::IsFinalCopyToken = true;
-         // }
-
+         
          // event
          SSAA::OnDrawFinal(native_device, native_device_context, cmd_list_data, device_data); // can replace PS
-         PS4Blur::OnDrawFinal(native_device, native_device_context, cmd_list_data, device_data); // can replace SRV, RTV, Viewport
+         auto ps4blur_rtv = PS4Blur::OnDrawFinal(native_device, native_device_context, cmd_list_data, device_data); // can replace SRV1, RTV1, Viewports
+         auto sepui_rtv = SeparableUI::OnDrawFinal(native_device, native_device_context, cmd_list_data, device_data); // can replace RTV2, Viewports
          DepthOfField::OnTonemapAndFinalDraw();
+
+         // 0-3 RTVs & Viewports
+         if (ps4blur_rtv != nullptr || sepui_rtv != nullptr)
+         {
+            ComPtr<ID3D11RenderTargetView> rtv0;
+            ComPtr<ID3D11DepthStencilView> dsv;
+            native_device_context->OMGetRenderTargets(1, rtv0.put(), dsv.put());
+         
+            std::array<ID3D11RenderTargetView*, 3> rtvs = { rtv0.get(), ps4blur_rtv, sepui_rtv };
+            native_device_context->OMSetRenderTargets(rtvs.size(), rtvs.data(), dsv.get());
+
+            D3D11_VIEWPORT vp0;
+            vp0.Width  = static_cast<float>(RenderTracker::res_main_ui_size.x);
+            vp0.Height = static_cast<float>(RenderTracker::res_main_ui_size.y);
+            vp0.MinDepth = 0.f;
+            vp0.MaxDepth = 1.f;
+            vp0.TopLeftX = 0.f;
+            vp0.TopLeftY = 0.f;
+            D3D11_VIEWPORT vp1 = vp0;
+            D3D11_VIEWPORT vp2 = vp0;
+
+            std::array<D3D11_VIEWPORT, 3> vps = { vp0, vp1, vp2 };
+            native_device_context->RSSetViewports(vps.size(), vps.data());
+         }
 
          return DrawOrDispatchOverrideType::None;
       }
 
+      // SeperableUI /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+      SeparableUI::OnDrawOrDispatch(native_device, native_device_context, cmd_list_data, device_data, ps);
+      
       // UI /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
       //See EXTRA
@@ -6632,83 +6732,18 @@ public:
          device_data.cb_luma_global_settings_dirty = true;
       }
 
-      // //UI Transparency: IsFinalCopyToken
-      // if (cb_luma_global_settings.GameSettings.UITransparency < 1.f && UISeparation::IsFinalCopyToken)
-      // {
-      //    //use token
-      //    UISeparation::IsFinalCopyToken = false;
-      //
-      //    //error: not exist
-      //    ASSERT(UISeparation::UIOutputTexOrig.get() != nullptr);
-      //
-      //    //copy
-      //    native_device_context->CopyResource(UISeparation::UIOutputTex.get(), UISeparation::UIOutputTexOrig.get());
-      // }
-
       // TO SWAPCHAIN /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
       
       if (TonemapInfo::GetDrawnFinal(cb_luma_global_settings.GameSettings.TonemapInfo) &&
          !RenderTracker::is_drawn_to_swapchain &&
          ps == ShaderHashesLists::ToSwapchain)
       {
+         // RenderTracker
          RenderTracker::is_drawn_to_swapchain = true;
-
          RenderTracker::OnDrawToSwapchain(native_device, native_device_context, cmd_list_data, device_data);
-         
-         // //UI Transparency
-         // if (cb_luma_global_settings.GameSettings.UITransparency < 1.f && UISeparation::UIOutputTex.get() == nullptr)
-         // {
-         //    //shader res 0
-         //    com_ptr<ID3D11ShaderResourceView> srv;
-         //    native_device_context->PSGetShaderResources(0, 1, &srv);
-         //    ASSERT(srv.get() != nullptr);
-         //
-         //    //get resource
-         //    com_ptr<ID3D11Resource> srv_res;
-         //    srv->GetResource(&srv_res);
-         //    ASSERT(srv_res.get() != nullptr);
-         //    
-         //    //get tex
-         //    com_ptr<ID3D11Texture2D> srv_tex;
-         //    auto hr0 = srv_res->QueryInterface(&srv_tex);
-         //    ASSERT(SUCCEEDED(hr0));
-         //    UISeparation::UIOutputTexOrig = srv_tex; //save for later
-         //
-         //    //get desc
-         //    D3D11_TEXTURE2D_DESC stv_tex_desc;
-         //    srv_tex->GetDesc(&stv_tex_desc);
-         //    
-         //    //create desc unorm
-         //    UISeparation::UIOutputTexDesc.Width          = stv_tex_desc.Width;
-         //    UISeparation::UIOutputTexDesc.Height         = stv_tex_desc.Height;
-         //    UISeparation::UIOutputTexDesc.MipLevels      = stv_tex_desc.MipLevels;
-         //    UISeparation::UIOutputTexDesc.ArraySize      = stv_tex_desc.ArraySize;
-         //    UISeparation::UIOutputTexDesc.Format         = stv_tex_desc.Format /*DXGI_FORMAT_R16G16B16A16_UNORM*/;
-         //    UISeparation::UIOutputTexDesc.SampleDesc     = stv_tex_desc.SampleDesc;
-         //    UISeparation::UIOutputTexDesc.Usage          = stv_tex_desc.Usage;
-         //    UISeparation::UIOutputTexDesc.BindFlags      = stv_tex_desc.BindFlags;
-         //    UISeparation::UIOutputTexDesc.CPUAccessFlags = stv_tex_desc.CPUAccessFlags;
-         //    UISeparation::UIOutputTexDesc.MiscFlags      = stv_tex_desc.MiscFlags;
-         //    
-         //    //create tex
-         //    auto hr1 = native_device->CreateTexture2D(&UISeparation::UIOutputTexDesc, nullptr, &UISeparation::UIOutputTex);
-         //    ASSERT(SUCCEEDED(hr1));
-         //    
-         //    //create rtv for later
-         //    auto hr2 = native_device->CreateRenderTargetView(UISeparation::UIOutputTex.get(), nullptr, &UISeparation::UIOutputRtv);
-         //    ASSERT(SUCCEEDED(hr2));
-         //    
-         //    //create shader res for later
-         //    auto hr3 = native_device->CreateShaderResourceView(UISeparation::UIOutputTex.get(), nullptr, &UISeparation::UIOutputSrv);
-         //    ASSERT(SUCCEEDED(hr3));
-         //
-         //    //skip so shader dont explode (just 1 frame)
-         //    return DrawOrDispatchOverrideType::Skip;
-         // }
-         //
-         // //add ui tex as shader res
-         // if (cb_luma_global_settings.GameSettings.UITransparency < 1.f)
-         //    native_device_context->PSSetShaderResources(1, 1, &UISeparation::UIOutputSrv);
+
+         // event
+         SeparableUI::OnDrawToSwapchain(native_device, native_device_context, cmd_list_data, device_data); // can replace SRV0-1
          
          return DrawOrDispatchOverrideType::None;
       }
@@ -6761,6 +6796,7 @@ public:
       ProgressBar::OnPresent();
       SeparateUIBrightness::OnPresent();
       SSAA::OnPresent();
+      SeparableUI::OnPresent();
       XeGTAO::OnPresent();
       SSS::OnPresent();
       Bloom::OnPresent();
@@ -6945,15 +6981,11 @@ public:
 #endif
 
          // Render Resolution
-#if DEVELOPMENT
-         ImGui::BulletText("Render Resolution: %dx%d (Color: %s) (Depth: %s) (UI: %s)",
+         ImGui::BulletText("Resolution: (Color: %dx%d) (Depth: %dx%d) (UI: %dx%d) (Output: %dx%d)",
             RenderTracker::res_main_color_size.x, RenderTracker::res_main_color_size.y,
-            RenderTracker::res_main_color ? "Yes" : "No",
-            RenderTracker::res_main_depth ? "Yes" : "No",
-            RenderTracker::res_main_ui ? "Yes" : "No");
-#else
-         ImGui::BulletText("Render Resolution: %dx%d", RenderTracker::res_main_color_size.x, RenderTracker::res_main_color_size.y);
-#endif
+            RenderTracker::res_main_depth_size.x, RenderTracker::res_main_depth_size.y,
+            RenderTracker::res_main_ui_size.x, RenderTracker::res_main_ui_size.y,
+            (uint)cb_luma_global_settings.SwapchainSize.x, (uint)cb_luma_global_settings.SwapchainSize.y);
 
          // device data shaders loaded
          ImGui::BulletText("Replacement Shaders: %d", CountFileClones(device_data));
@@ -7622,7 +7654,7 @@ public:
                                                                                           "\nThis is about the same cost as MLAA."
                                                                                           "\n"
                                                                                           "\n[Subpixel Morphological Anti-Aliasing (SMAA)]"
-                                                                                          "\nMore smart, it'll blur stronger than MLAA, and won't overdo like DLAA."
+                                                                                          "\nSmarter, it'll blur stronger than MLAA, and won't overdo like DLAA."
                                                                                           "\nInitially seen in CryTek & Call of Duty, it has the most involved edge detection."
                                                                                           "\nThis is the most taxing option, taking in 3D depth to find edges.");
 
@@ -8298,7 +8330,6 @@ public:
 
       if (ImGui::Button("Panic Reset")) OnInitSwapchain_ResetEvent(false);
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Act as if the game has changed resolution, resetting the states of enhancements.");
-      
    }
 
 #if DEVELOPMENT
