@@ -31,9 +31,8 @@ float GetPulseMultiplier(float speed = 0.1f, float amount = 0.25f)
 {
    return (1.f-amount/2) + amount/2 * sinf(cb_luma_global_settings.FrameIndex * speed);
 }
-
-// URL or file 
-void PathOrURLOpen(const char* url) {
+   
+void OpenURL(const char* url) {
 #if defined(_WIN32) || defined(_WIN64)
    std::string command = "start " + std::string(url);
    std::system(command.c_str());
@@ -45,7 +44,28 @@ void PathOrURLOpen(const char* url) {
    std::system(command.c_str());
 #endif
 }
-
+void OpenFilePath(const char* path)
+{
+   // sanitize by putting quotes if spaces exist
+   if (strchr(path, ' ') != nullptr) {
+      std::string path_str = std::string(path);
+      if (path_str.front() != '"') path_str.insert(0, "\"");
+      if (path_str.back() != '"') path_str.append("\"");
+      path = path_str.c_str();
+   }
+   
+#if defined(_WIN32)
+   std::string command = "explorer /select,\"" + std::string(path) + "\""; // start doesn't work if diff drive?
+   std::system(command.c_str());
+#elif defined(__linux__)
+   std::string command = "xdg-open \"" + std::string(path) + "\"";
+   std::system(command.c_str());
+#elif defined(__APPLE__)
+   std::string command = "open -R \"" + std::string(path) + "\"";
+   std::system(command.c_str());
+#endif
+}
+   
 bool IsModEnabled() {return custom_shaders_enabled || !ignore_indirect_upgraded_textures || !ignore_upgraded_samplers;}
 
 float FPSToMilliseconds(float fps) { return fps > 0 ? 1000.f / fps : 0.f; }
@@ -177,8 +197,8 @@ namespace Installation // support for mod manager's config.toml
       if (!SUCCEEDED(hr))
       {
          MessageBoxA(nullptr, "Failed! Please do it manually:\n\n- Download .addon64\n- Drop it next to dxgi.dll\n\n(Both browser and file explorer will now open!)", "Luma Display Commander Install", MB_OK | MB_ICONERROR);
-         PathOrURLOpen("https://github.com/XgarhontX/display-commander/releases/");
-         PathOrURLOpen(path_addon.string().c_str());
+         OpenURL("https://github.com/XgarhontX/display-commander/releases/");
+         OpenFilePath(path_addon.string().c_str());
       }
       else
       {
@@ -1288,8 +1308,10 @@ namespace SeparateUIBrightness
 
 namespace SSAA // detects https://github.com/korenkonder/MMPlusMods/blob/master/src/SSAAEnable/dllmain.cpp
 {
+   // SSAA detection
    bool enabled = false;
-   
+   static int8_t enabled_dll = -1; // -1 = not checked, 0 = not present, 1 = present
+
    constexpr const char* Luma_MegaMix_Final = "Luma_MegaMix_Final"; // file & shader name
    
    void OnInit()
@@ -1299,12 +1321,16 @@ namespace SSAA // detects https://github.com/korenkonder/MMPlusMods/blob/master/
 
    void OnRenderResolutionFound(uint2 render_resolution, DeviceData& device_data)
    {
-      // check resolution TODO: instead of this, use memory hack?
+      // check resolution
       uint rtv_pix = render_resolution.x * render_resolution.y;
       uint native_pix = device_data.output_resolution.x * device_data.output_resolution.y;
       uint thres = native_pix * 1.1f;
       enabled = rtv_pix > thres;
-      reshade::log::message(reshade::log::level::info, std::format("SSAA::OnRenderResolutionFound(): SSAA {} (Render: {}x{}, Output: {}x{})", enabled ? "enabled" : "disabled", render_resolution.x, render_resolution.y, device_data.output_resolution.x, device_data.output_resolution.y).c_str());
+
+      if (enabled_dll == -1) enabled_dll = GetModuleHandleA("SSAAEnable.dll") != nullptr ? 1 : 0;
+      enabled |= enabled_dll == 1;
+      
+      reshade::log::message(reshade::log::level::info, std::format("SSAA::OnRenderResolutionFound(): SSAA {} (Render: {}x{}, Output: {}x{}, DLL: {})", enabled ? "enabled" : "disabled", render_resolution.x, render_resolution.y, device_data.output_resolution.x, device_data.output_resolution.y, enabled_dll).c_str());
    }
    
    // normal Final isn't drawn when SSAA. we must find other ways to check
@@ -6399,6 +6425,117 @@ namespace RenderTracker // partial
       Reset_State();
    }
 }
+
+namespace UserPresets
+{
+   namespace Quality
+   {
+      struct UserPreset
+      {
+         bool  ao_enabled = true;
+         int   ao_slice = 1;
+         bool  ao_halfres = true; // should leave on
+         bool  sss_enabled = true;
+         int   shadows_baseres = 2;
+         int   bloom_neutral = 1;
+         bool  bloom_hq = true;
+         AntiAliasing::Enabled aa_mode = AntiAliasing::Vanilla;
+         int   aa_ssaafilter = 1;
+         bool  reflections_enabled = true;
+         float reflections_ratio = 0.5f;
+         bool  spotlights_enabled = true;
+
+         void Apply()
+         {
+            XeGTAO::enabled = ao_enabled;
+            reshade::set_config_value(nullptr, NAME, XeGTAO::reshadesave_enabled, XeGTAO::enabled);
+
+            ShaderDefineInfo::Set(ShaderDefineInfo::XEGTAO_SLICECOUNT, ao_slice);
+            
+            ShaderDefineInfo::Set(ShaderDefineInfo::XEGTAO_HALFRES, ao_halfres);
+
+            SSS::enabled = sss_enabled;
+            reshade::set_config_value(nullptr, NAME, SSS::reshadesave_enabled, SSS::enabled);
+
+            ShaderDefineInfo::Set(ShaderDefineInfo::CUSTOM_ESM_DEPTH_NEW_SIZE, shadows_baseres);
+
+            ShaderDefineInfo::Set(ShaderDefineInfo::CUSTOM_BLOOM_THRESHOLD_1, bloom_neutral);
+
+            Bloom::enabled = bloom_hq;
+            reshade::set_config_value(nullptr, NAME, Bloom::reshadesave_enabled, Bloom::enabled);
+
+            AntiAliasing::enabled = aa_mode;
+            reshade::set_config_value(nullptr, NAME, AntiAliasing::reshadesave_enabled, AntiAliasing::enabled);
+            
+            ShaderDefineInfo::Set(ShaderDefineInfo::CUSTOM_SSAA_FILTER, aa_ssaafilter);
+
+            DuplicateWorldReflections::enabled = reflections_enabled;
+            reshade::set_config_value(nullptr, NAME, DuplicateWorldReflections::reshadesave_enabled, DuplicateWorldReflections::enabled);
+
+            DuplicateWorldReflections::desired_resolution = uint2(RenderTracker::res_main_color_size.x * reflections_ratio, RenderTracker::res_main_color_size.y * reflections_ratio);
+            reshade::set_config_value(nullptr, NAME, DuplicateWorldReflections::reshadesave_desired_resolution_x, DuplicateWorldReflections::desired_resolution.x);
+            reshade::set_config_value(nullptr, NAME, DuplicateWorldReflections::reshadesave_desired_resolution_y, DuplicateWorldReflections::desired_resolution.y);
+
+            SpotLightShadows::enabled = spotlights_enabled;
+            reshade::set_config_value(nullptr, NAME, SpotLightShadows::reshadesave_enabled, SpotLightShadows::enabled);
+         }
+      };
+
+      void ApplyOn()
+      {
+         UserPreset preset = {};
+         preset.Apply();
+      }
+
+      void ApplyOff()
+      {
+         UserPreset preset = {};
+         preset.ao_enabled = false;
+         // preset.ao_slice = 1;
+         // preset.ao_halfres = true;
+         preset.sss_enabled = false;
+         preset.shadows_baseres = 0;
+         preset.bloom_neutral = 0;
+         preset.bloom_hq = false;
+         // preset.aa_mode = AntiAliasing::Vanilla;
+         preset.aa_ssaafilter = 0;
+         preset.reflections_enabled = false;
+         // preset.reflections_ratio = 0.5f;
+         preset.spotlights_enabled = false;
+         preset.Apply();
+      }
+
+      void ApplyOnHigh()
+      {
+         UserPreset preset = {};
+         preset.ao_slice++;
+         preset.shadows_baseres++;
+         preset.aa_mode = AntiAliasing::SMAA;
+         preset.aa_ssaafilter++;
+         preset.Apply();
+      }
+      
+      void ApplyOnHigh2()
+      {
+         UserPreset preset = {};
+         preset.ao_slice += 2;
+         preset.shadows_baseres += 2;
+         preset.aa_mode = AntiAliasing::SMAA;
+         preset.aa_ssaafilter++;
+         preset.reflections_ratio = 1.0f;
+         preset.Apply();
+      }
+   }
+
+   namespace PS4
+   {
+      void Apply(bool enable)
+      {
+         ShaderDefineInfo::Set(ShaderDefineInfo::CUSTOM_HDTVREC709_1, enable);
+         ShaderDefineInfo::Set(ShaderDefineInfo::CUSTOM_PS4BLUR_1, enable);
+      }
+   }
+}
 } // unnamed namespace
 
 class ProjectDivaMegaMix final : public Game
@@ -6483,7 +6620,7 @@ public:
       default_luma_global_game_settings.XeGTAOFinalPower = cb_luma_global_settings.GameSettings.XeGTAOFinalPower = 1.f;
       
       default_luma_global_game_settings.SSSRadius = cb_luma_global_settings.GameSettings.SSSRadius = 1.f;
-      default_luma_global_game_settings.SSSEyeDodge = cb_luma_global_settings.GameSettings.SSSEyeDodge = 0.f;
+      default_luma_global_game_settings.SSSEyeDodge = cb_luma_global_settings.GameSettings.SSSEyeDodge = 0.5f;
       default_luma_global_game_settings.SkinSpecular = cb_luma_global_settings.GameSettings.SkinSpecular = 1.f;
 
       default_luma_global_game_settings.FrameBlendRatio = cb_luma_global_settings.GameSettings.FrameBlendRatio = 0.33f;
@@ -6974,9 +7111,9 @@ public:
 #endif
 
          // Render Resolution
-         ImGui::BulletText("Resolution: (Color: %dx%d) (Depth: %dx%d) (UI: %dx%d) (Output: %dx%d)",
+         ASSERT_MSG(RenderTracker::res_main_color_size.x == RenderTracker::res_main_depth_size.x && RenderTracker::res_main_color_size.y == RenderTracker::res_main_depth_size.y, "Color and Depth resolution mismatch!");
+         ImGui::BulletText("Resolution: (Render: %dx%d) -> (Composite UI: %dx%d) -> (Output: %dx%d)",
             RenderTracker::res_main_color_size.x, RenderTracker::res_main_color_size.y,
-            RenderTracker::res_main_depth_size.x, RenderTracker::res_main_depth_size.y,
             RenderTracker::res_main_ui_size.x, RenderTracker::res_main_ui_size.y,
             (uint)cb_luma_global_settings.SwapchainSize.x, (uint)cb_luma_global_settings.SwapchainSize.y);
 
@@ -6998,7 +7135,8 @@ public:
          DrawColoredSubHeader("README");
 
          ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 1.f, 0.5f, 1.f));
-         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("For those new to Dear ImGUI (library for ReShade UI), CTRL click a slider for keyboard input.");
+         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("The quickest setup is to use the presets below.");
+         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("CTRL click a slider for keyboard input.");
          ImGui::PopStyleColor();
          ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("(HDR Users) This mod is tuned for a faithful at +1 HDR Stop (e.g. 200 Paper & 400 Peak, 300 Paper & 600 Peak, etc.)."
                                                                 "\nIt's mainly because lighting is done in gamma, which makes bright colors exponentially brighter when unclamped.");
@@ -7027,8 +7165,22 @@ public:
             reshade::set_config_value(runtime, NAME, "UIIsReadmeDone", UserSettingsMisc::imgui_readme_done);
          }
       }
+      if (DrawCollapsingHeaderEnabledColored("Presets", false, !UserSettingsMisc::imgui_readme_done))
+      {
+         DrawColoredSubHeader("Quality: Go beyond vanilla.");
+         if (ImGui::Button("Off")) UserPresets::Quality::ApplyOff(); ImGui::SameLine();
+         if (ImGui::Button("High")) UserPresets::Quality::ApplyOn(); ImGui::SameLine();
+         if (ImGui::Button("Extreme")) UserPresets::Quality::ApplyOnHigh(); ImGui::SameLine();
+         if (ImGui::Button("Extra Extreme")) UserPresets::Quality::ApplyOnHigh2();
 
-      // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
+         ImGui::NewLine();
+         DrawColoredSubHeader("PS4: Enables gamma and frame blending seen on PS4.");
+         if (ImGui::Button("Off (Arcade, PC, Other Consoles)")) UserPresets::PS4::Apply(false); ImGui::SameLine();
+         if (ImGui::Button("On (PS4 Outlier)")) UserPresets::PS4::Apply(true);
+         ImGui::BulletText("Consider:"); ImGui::SameLine(); if (ImGui::Button("Future Tone UI by CoolChar (GameBanana)")) OpenURL("https://gamebanana.com/mods/471147");
+      }
+
+      ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
       
       if (DrawCollapsingHeaderEnabledColored("Gamma", (!is_sdr && ShaderDefineInfo::GetB(ShaderDefineInfo::CUSTOM_GAMMACORRECT22)) || (ShaderDefineInfo::GetB(ShaderDefineInfo::CUSTOM_HDTVREC709_1))))
       {
@@ -7057,7 +7209,7 @@ public:
             
             //link test
             if (ImGui::Button("Further Explanation (Google Slides)"))
-               PathOrURLOpen("https://docs.google.com/presentation/d/e/2PACX-1vSXeLHlbm6repcS7fels1-SXYGRmzziRrnuJ8nDO8J5rsWV3dT1-nVyCKp0Tj_stwx-9qlCI-N6rYIT/pub?start=false&loop=false&slide=id.g3e007eafba8_0_0");
+               OpenURL("https://docs.google.com/presentation/d/e/2PACX-1vSXeLHlbm6repcS7fels1-SXYGRmzziRrnuJ8nDO8J5rsWV3dT1-nVyCKp0Tj_stwx-9qlCI-N6rYIT/pub?start=false&loop=false&slide=id.g3e007eafba8_0_0");
 
             if (UserSettingsMisc::imgui_show_advanced)
             {
@@ -7134,6 +7286,8 @@ public:
          ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("By needing to sample the texture multiple times to identify, this may spike VRAM usage.\nThe best solution is to download some UI texture mod.");
          ImGui::PopStyleColor();
 
+         ImGui::BulletText("Consider:"); ImGui::SameLine(); if (ImGui::Button("Clean Interface by Pikota (GameBanana)")) OpenURL("https://gamebanana.com/mods/524644");
+         
          {
             int def = ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_HUDBRIGHTNESS, "Custom HUD Brightness",
                { "Off", "Vanilla", "Simple UI (simple_ui_v115.zip)"/*, "Clean Interface ()" */},
@@ -7197,7 +7351,7 @@ public:
       }
 
       ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
-
+      
       // XEGTAO_MANUALSIZE auto toggle
       ShaderDefineInfo::Set(ShaderDefineInfo::XEGTAO_MANUALSIZE, !RenderTracker::IsResolutionRenderEqualsOutput());
 
@@ -7205,10 +7359,6 @@ public:
       if (DrawCollapsingHeaderEnabledColored("Ambient Occlusion", XeGTAO::enabled))
       {
          DrawColoredSubHeader("Insert a pass for indirect shadowing.");
-         
-         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 1.f, 0.5f, 1.f));
-         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Requires Future Tone PBR (primarily SSS) to initialize.");
-         ImGui::PopStyleColor();
          
          ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.f));
          ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("There are errors (e.g. occlusion in fog & sky).\nI might account per PV if it's too noticeable.");
@@ -7222,7 +7372,7 @@ public:
          if (ImGui::Checkbox("Disallow for MegaMix", &XeGTAO::disallow_for_npr))
             reshade::set_config_value(runtime, NAME, XeGTAO::reshadesave_disallow_for_npr, XeGTAO::disallow_for_npr);
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip("When MegaMix NPR detected, this will not draw.\n\n(This doesn't discern the style of a scene, e.g. \"Two-Faced Lovers\".\nAll 3D will still get occlusion.)");
+            ImGui::SetTooltip("When MegaMix NPR detected, this will not draw.\n\n(This doesn't discern the style of a scene, e.g. \"Two-Faced Lovers\".\nAll 3D is indiscriminately treated as an occluder.)");
          
          ImGui::NewLine();
          DrawColoredSubHeader("Parameters");
@@ -7254,18 +7404,19 @@ public:
          ShaderDefineInfo::UIDropDown(ShaderDefineInfo::XEGTAO_CHECKBOARD, "Rate", { "Full", "Half (Unnoticeable, especially 120 FPS?)", "Quarter (Rather unusable smearing.)" }, "Render every other pixel to save performance.");
 
          if (UserSettingsMisc::imgui_show_advanced) ShaderDefineInfo::UIDropDown(ShaderDefineInfo::XEGTAO_THREADS_AO, "Threads: GTAO Compute", { "8", "16" }, "Thread groups for compute shaders.\n16 should be fastest, but maybe 8 is better for your PC?");
-         
-         ImGui::NewLine();
-         DrawColoredSubHeader("Half Resolution");
-         bool is_halfres = ShaderDefineInfo::GetB(ShaderDefineInfo::XEGTAO_HALFRES);
-         ImGui::PushStyleColor(ImGuiCol_Text, !is_halfres ? ImVec4(1.f, 0.4f, 0.4f, 1.f) : ImVec4(0.4f, 1.f, 0.4f, 1.f));
-         ShaderDefineInfo::UIToggleCheckmark(ShaderDefineInfo::XEGTAO_HALFRES, "Half Resolution", "Render AO at half resolution to GREATLY save performance.\n\n(Full resolution not only hits the GPU's ALU, but VRAM!\nHigh FPS will scale nearly exponentially.)");
-         ImGui::PopStyleColor();
-         bool is_halfres_after = ShaderDefineInfo::GetB(ShaderDefineInfo::XEGTAO_HALFRES);
-         if (is_halfres != is_halfres_after) XeGTAO::ResetCreatedResource();
 
          if (UserSettingsMisc::imgui_show_advanced)
          {
+            ImGui::NewLine();
+            DrawColoredSubHeader("Half Resolution");
+            
+            bool is_halfres = ShaderDefineInfo::GetB(ShaderDefineInfo::XEGTAO_HALFRES);
+            ImGui::PushStyleColor(ImGuiCol_Text, !is_halfres ? ImVec4(1.f, 0.4f, 0.4f, 1.f) : ImVec4(0.4f, 1.f, 0.4f, 1.f));
+            ShaderDefineInfo::UIToggleCheckmark(ShaderDefineInfo::XEGTAO_HALFRES, "Half Resolution", "Render AO at half resolution to GREATLY save performance.\n\n(Full resolution not only hits the GPU's ALU, but VRAM!\nHigh FPS will scale nearly exponentially.)");
+            ImGui::PopStyleColor();
+            bool is_halfres_after = ShaderDefineInfo::GetB(ShaderDefineInfo::XEGTAO_HALFRES);
+            if (is_halfres != is_halfres_after) XeGTAO::ResetCreatedResource();
+            
             if (!is_halfres_after) ImGui::BeginDisabled();
             ShaderDefineInfo::UIToggleCheckmark(ShaderDefineInfo::XEGTAO_UPSAMPLE, "Joint Bilateral Upsample", "Upscale AO results while preventing leaks by using the spatial difference between half vs full res.");
             if (!is_halfres_after) ImGui::EndDisabled();
@@ -7652,7 +7803,7 @@ public:
          ImGui::NewLine();
          DrawColoredSubHeader("Super Sampling Anti-Aliasing (SSAA): Bruteforce higher internal resolution.");
 
-         if (!SSAA::enabled && ImGui::Button("Download SSAA Enabled by korenkonder")) PathOrURLOpen("https://github.com/korenkonder/MMPlusMods/releases#release-SSAAEnable-1.03");
+         if (!SSAA::enabled && ImGui::Button("Download SSAA Enabled by korenkonder")) OpenURL("https://github.com/korenkonder/MMPlusMods/releases#release-SSAAEnable-1.03");
          
          if (!SSAA::enabled) ImGui::BeginDisabled();
          {
@@ -7927,10 +8078,10 @@ public:
             ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("This hack is naive, as users have reported desyncing issues.");
             ImGui::PopStyleColor();
             
-            ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Consider: "); ImGui::SameLine();
-            if (ImGui::Button("High Frame Rate by RagdollClash (GameBanana)")) PathOrURLOpen("https://gamebanana.com/mods/380955");
+            ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Consider:"); ImGui::SameLine();
+            if (ImGui::Button("High Frame Rate by RagdollClash (GameBanana)")) OpenURL("https://gamebanana.com/mods/380955");
             
-            ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Consider: "); ImGui::SameLine();
+            ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Consider:"); ImGui::SameLine();
             if (ImGui::Button("Display Commander MegaMix+ Fork (GitHub 1-Click Install)")) Installation::InstallDisplayCommander();
          }
       }
@@ -8289,7 +8440,7 @@ public:
       
       ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
       
-      if (ImGui::Checkbox("Show Advanced Settings", &UserSettingsMisc::imgui_show_advanced)) reshade::set_config_value(runtime, NAME, "UIIsAdvanced", UserSettingsMisc::imgui_show_advanced);
+      if (ImGui::Checkbox("Show Extra Settings", &UserSettingsMisc::imgui_show_advanced)) reshade::set_config_value(runtime, NAME, "UIIsAdvanced", UserSettingsMisc::imgui_show_advanced);
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Reveal settings for power users.");
 
       if (ImGui::Checkbox("Hide README", &UserSettingsMisc::imgui_readme_done)) reshade::set_config_value(runtime, NAME, "UIIsReadmeDone", UserSettingsMisc::imgui_readme_done);
@@ -8297,13 +8448,22 @@ public:
 
       if (ImGui::Button("Panic Reset (Use only at Main Menu!)")) OnInitSwapchain_ResetEvent(false);
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("If anything acts up, try this to reset all modules as if the game restarted or resolution changed.");
+      
+      ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
+
+      if (ImGui::CollapsingHeader("Update Instructions"))
+      {
+         DrawColoredSubHeader("Override files.");
+         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Automatic: \"Clean Update Mod\" on DivaModManager.");
+         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Manual: Download, drag in, replace.");
+         ImGui::Bullet(); ImGui::SameLine(); if (ImGui::Button("GameBanana")) OpenURL("https://gamebanana.com/mods/644390");
+      }
 
       if (ImGui::CollapsingHeader("Uninstall Instructions"))
       {
-         DrawColoredSubHeader("Just delete 2 files and 1 folder.");
-
-         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Close the game.");
-         ImGui::Bullet(); ImGui::SameLine(); if (ImGui::Button("Open the game folder.")) PathOrURLOpen(Installation::path_exe.string().c_str());
+         DrawColoredSubHeader("Delete 2 files and 1 folder.");
+         
+         ImGui::Bullet(); ImGui::SameLine(); if (ImGui::Button("Open the game folder.")) OpenFilePath(Installation::path_exe.string().c_str());
          ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Delete \"dxgi.dll\"");
          ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Delete \"Luma-Project Diva Mega Mix.addon\"");
          ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Delete \"Luma\"");
@@ -8342,10 +8502,10 @@ public:
       
       ImGui::Text("Third Party:");
       ImGui::BulletText("ReShade");
-      ImGui::SameLine(); if (ImGui::Button("Open Site")) PathOrURLOpen("https://reshade.me/");
+      ImGui::SameLine(); if (ImGui::Button("Open Site")) OpenURL("https://reshade.me/");
       ImGui::BulletText("ImGui");
       ImGui::BulletText("RenoDX");
-      ImGui::SameLine(); if (ImGui::Button("Open GitHub Link")) PathOrURLOpen("https://github.com/clshortfuse/renodx");
+      ImGui::SameLine(); if (ImGui::Button("Open GitHub Link")) OpenURL("https://github.com/clshortfuse/renodx");
       ImGui::BulletText("3Dmigoto");
       ImGui::BulletText("Oklab");
       ImGui::BulletText("JzAzBz");
@@ -8360,15 +8520,15 @@ public:
       ImGui::NewLine();
 
       ImGui::Text("Referenced Shader Source Code:");
-      ImGui::BulletText("XeGTAO"); ImGui::SameLine(); if (ImGui::Button("Open GitHub Link")) PathOrURLOpen("https://github.com/GameTechDev/XeGTAO");
-      ImGui::BulletText("Barbatos XeGTAO (for JointBilateralUpsample() weights)");  ImGui::SameLine(); if (ImGui::Button("Open GitHub Link")) PathOrURLOpen("https://github.com/BarbatosAWLS/Reshade-Shaders/blob/main/Shaders/BaBa_XeGTAO.fx");
-      ImGui::BulletText("Barbatos DLAA");  ImGui::SameLine(); if (ImGui::Button("Open GitHub Link")) PathOrURLOpen("https://github.com/BarbatosAWLS/Reshade-Shaders/blob/main/Shaders/BaBa_DLAA-T.fx");
+      ImGui::BulletText("XeGTAO"); ImGui::SameLine(); if (ImGui::Button("Open GitHub Link")) OpenURL("https://github.com/GameTechDev/XeGTAO");
+      ImGui::BulletText("Barbatos XeGTAO (for JointBilateralUpsample() weights)");  ImGui::SameLine(); if (ImGui::Button("Open GitHub Link")) OpenURL("https://github.com/BarbatosAWLS/Reshade-Shaders/blob/main/Shaders/BaBa_XeGTAO.fx");
+      ImGui::BulletText("Barbatos DLAA");  ImGui::SameLine(); if (ImGui::Button("Open GitHub Link")) OpenURL("https://github.com/BarbatosAWLS/Reshade-Shaders/blob/main/Shaders/BaBa_DLAA-T.fx");
 
       ImGui::NewLine();
       
       ImGui::Text("High FPS:");
-      ImGui::BulletText("SpecialK (memory addresses)"); ImGui::SameLine(); if (ImGui::Button("Open GitHub Link")) PathOrURLOpen("https://github.com/SpecialKO/SpecialK/blob/6fe51ee1eca4aee26a59e227ee5402ad3b55fcc0/src/plugins/unclassified.cpp#L1264");
-      ImGui::BulletText("Display Commander (limit replacement)"); ImGui::SameLine(); if (ImGui::Button("Open GitHub Link")) PathOrURLOpen("https://github.com/pmnoxx/display-commander");
+      ImGui::BulletText("SpecialK (memory addresses)"); ImGui::SameLine(); if (ImGui::Button("Open GitHub Link")) OpenURL("https://github.com/SpecialKO/SpecialK/blob/6fe51ee1eca4aee26a59e227ee5402ad3b55fcc0/src/plugins/unclassified.cpp#L1264");
+      ImGui::BulletText("Display Commander (limit replacement)"); ImGui::SameLine(); if (ImGui::Button("Open GitHub Link")) OpenURL("https://github.com/pmnoxx/display-commander");
    }
 };
 
