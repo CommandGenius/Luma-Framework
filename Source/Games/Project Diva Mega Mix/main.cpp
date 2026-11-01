@@ -468,10 +468,7 @@ namespace ShaderDefineInfo
    constexpr uint32_t XEGTAO_CHECKBOARD                 = char_ptr_crc32("XEGTAO_CHECKBOARD");
    constexpr uint32_t XEGTAO_UPSAMPLE                   = char_ptr_crc32("XEGTAO_UPSAMPLE");
    constexpr uint32_t XEGTAO_MANUALSIZE                 = char_ptr_crc32("XEGTAO_MANUALSIZE");
-   constexpr uint32_t XEGTAO_THREADS_NORMALSGEN         = char_ptr_crc32("XEGTAO_THREADS_NORMALSGEN");
-   constexpr uint32_t XEGTAO_THREADS_NORMALSSMOOTH      = char_ptr_crc32("XEGTAO_THREADS_NORMALSSMOOTH");
    constexpr uint32_t XEGTAO_THREADS_AO                 = char_ptr_crc32("XEGTAO_THREADS_AO");
-   constexpr uint32_t XEGTAO_THREADS_DENOISE            = char_ptr_crc32("XEGTAO_THREADS_DENOISE");
    constexpr uint32_t CUSTOM_PS4BLUR_1                  = char_ptr_crc32("CUSTOM_PS4BLUR_1");
    constexpr uint32_t CUSTOM_HDRTONEMAPONSDR            = char_ptr_crc32("CUSTOM_HDRTONEMAPONSDR");
    constexpr uint32_t CUSTOM_SSAA_FILTER                = char_ptr_crc32("CUSTOM_SSAA_FILTER");
@@ -525,10 +522,7 @@ namespace ShaderDefineInfo
          {"XEGTAO_MANUALSIZE", '0', true, false, "XeGTAO compute viewport size in shader.", 1},
          {"XEGTAO_CHECKBOARD", '0', true, false, "XeGTAO checkerboard rendering.", 2},
          {"XEGTAO_UPSAMPLE", '1', true, false, "XeGTAO Joint Bilateral Upsample.", 1},
-         {"XEGTAO_THREADS_NORMALSGEN", '0', true, false, "XeGTAO compute shader thread groups.", 1},
-         {"XEGTAO_THREADS_NORMALSSMOOTH", '0', true, false, "XeGTAO compute shader thread groups.", 1},
          {"XEGTAO_THREADS_AO", '1', true, false, "XeGTAO compute shader thread groups.", 1},
-         {"XEGTAO_THREADS_DENOISE", '0', true, false, "XeGTAO compute shader thread groups.", 1},
          {"CUSTOM_SEPARABLEUI", '0', true, false, "UI draws to a separate tex.", 1},
          {"CUSTOM_TESTBGSPRITES", '0', true, false, "Test BG Sprites layering.", 2},
          {"CUSTOM_TONEMAP_IDENTIFY", '0', true, false, "Draw binary representation of tonemap uber variant number.", 1},
@@ -1660,7 +1654,7 @@ namespace XeGTAO
             ASSERT_MSG(SUCCEEDED(hr0), "PreFilteredDepth hr0");
 
             // uavs
-            D3D11_UNORDERED_ACCESS_VIEW_DESC uav_desc;
+            D3D11_UNORDERED_ACCESS_VIEW_DESC uav_desc = {};
             uav_desc.Format = PreFilteredDepth::tex_desc.Format;
             uav_desc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
             for (int i = 0; i < PreFilteredDepth::uavs.size(); ++i)
@@ -1861,18 +1855,18 @@ namespace XeGTAO
    {
       struct ThreadCount
       {
-         int thread_count = -1;
+         int8_t thread_count = -1;
          UINT x = 0;
          UINT x_half = 0;
          UINT y = 0;
          UINT y_half = 0;
 
-         void Update(uint32_t shader_def, bool is_half_size)
+         void Update(int new_thread_count, bool is_half_size)
          {
-            if (ShaderDefineInfo::Get(shader_def) != thread_count) //dirty?
+            if (new_thread_count != thread_count) //dirty?
             {
                uint2 size = is_half_size ? FoundResource::GetSizeHalf() : FoundResource::size;
-               thread_count = !ShaderDefineInfo::Get(shader_def) ? 8 : 16;
+               thread_count = new_thread_count;
                
                x = (size.x + thread_count - 1) / thread_count;
                x_half = (size.x + (thread_count * 2) - 1) / (thread_count * 2);
@@ -1882,21 +1876,23 @@ namespace XeGTAO
             }
          }
 
+         void Update(uint32_t shader_def, bool is_half_size)
+         {
+            int new_thread_count = !ShaderDefineInfo::Get(shader_def) ? 8 : 16;
+            Update(new_thread_count, is_half_size);
+         }
+         
          UINT GetXEffective(bool is_checkboard) const { return is_checkboard ? x_half : x; }
          UINT GetYEffective(bool is_checkboard) const { return is_checkboard ? y_half : y; }
       };
 
-      ThreadCount normals_gen = {};
-      ThreadCount normals_smooth = {};
+      ThreadCount def_8 = {};
       ThreadCount main_pass = {};
-      ThreadCount denoise_pass = {};
 
       void Reset()
       {
-         normals_gen = {};
-         normals_smooth = {};
+         def_8 = {};
          main_pass = {};
-         denoise_pass = {};
       }
    }
 
@@ -2027,7 +2023,10 @@ namespace XeGTAO
       if (main_color_res_handle != reinterpret_cast<uint64_t>(FoundResource::Color::res.get())) return false;
       
       // Thread counts setup
+      bool is_half_res = ShaderDefineInfo::GetB(ShaderDefineInfo::XEGTAO_HALFRES);
       int checkerboard_mode = ShaderDefineInfo::GetB(ShaderDefineInfo::XEGTAO_CHECKBOARD);
+      ThreadCount::main_pass.Update(ShaderDefineInfo::XEGTAO_THREADS_AO, is_half_res);
+      ThreadCount::def_8.Update(8, is_half_res);
       UINT thread_x_effective;
       UINT thread_y_effective;
 
@@ -2038,9 +2037,7 @@ namespace XeGTAO
          denoise_count = std::clamp(denoise_count, 0, 2);
          denoise_count_effective = denoise_count_effective_table[denoise_count];
       }
-
-      // half res setup
-      bool is_half_res = ShaderDefineInfo::GetB(ShaderDefineInfo::XEGTAO_HALFRES);
+      
       // Back up draw 
       DrawStateStack<DrawStateStackType::SimpleGraphics> dss;
       dss.Cache(native_device_context, 0);
@@ -2088,9 +2085,8 @@ namespace XeGTAO
       const std::array<ID3D11ShaderResourceView*, 2> srvs_normals_gen = { CreatedResource::Depth32::srv.get(), CreatedResource::PreFilteredDepth::srv.get() }; //in: depth, prefiltered depth
       native_device_context->CSSetShaderResources(0, srvs_normals_gen.size(), srvs_normals_gen.data()); //in: depth
       {
-         ThreadCount::normals_gen.Update(ShaderDefineInfo::XEGTAO_THREADS_NORMALSGEN, is_half_res);
-         thread_x_effective = ThreadCount::normals_gen.GetXEffective(checkerboard_mode >= 1);
-         thread_y_effective = ThreadCount::normals_gen.GetYEffective(checkerboard_mode >= 2);
+         thread_x_effective = ThreadCount::def_8.GetXEffective(checkerboard_mode >= 1);
+         thread_y_effective = ThreadCount::def_8.GetYEffective(checkerboard_mode >= 2);
       }
       native_device_context->Dispatch(thread_x_effective, thread_y_effective, 1);
       ID3D11ShaderResourceView* normals_srv_effective = CreatedResource::Normals0::srv.get();
@@ -2099,9 +2095,8 @@ namespace XeGTAO
       {
          // NormalsSmooth 1 bind and draw
          {
-            ThreadCount::normals_smooth.Update(ShaderDefineInfo::XEGTAO_THREADS_NORMALSSMOOTH, is_half_res);
-            thread_x_effective = ThreadCount::normals_smooth.GetXEffective(checkerboard_mode >= 1);
-            thread_y_effective = ThreadCount::normals_smooth.GetYEffective(checkerboard_mode >= 2);
+            thread_x_effective = ThreadCount::def_8.GetXEffective(checkerboard_mode >= 1);
+            thread_y_effective = ThreadCount::def_8.GetYEffective(checkerboard_mode >= 2);
          }
          native_device_context->CSSetUnorderedAccessViews(0, 1, &CreatedResource::Normals1::uav, nullptr); //out: normals smoothed 1
          native_device_context->CSSetShader(device_data.native_compute_shaders.at(CompileTimeStringHash(Luma_XeGTAO_NormalSmooth1)).get(), nullptr, 0);
@@ -2128,7 +2123,6 @@ namespace XeGTAO
       const std::array<ID3D11ShaderResourceView*, 4> srvs_main_pass = { CreatedResource::Depth32::srv.get(), CreatedResource::PreFilteredDepth::srv.get(), FoundResource::Depth::srv.get(), normals_srv_effective }; //in: depth, generated normals
       native_device_context->CSSetShaderResources(0, srvs_main_pass.size(), srvs_main_pass.data());
       {
-         ThreadCount::main_pass.Update(ShaderDefineInfo::XEGTAO_THREADS_AO, is_half_res);
          thread_x_effective = ThreadCount::main_pass.GetXEffective(checkerboard_mode >= 1);
          thread_y_effective = ThreadCount::main_pass.GetYEffective(checkerboard_mode >= 2);
       }
@@ -2137,9 +2131,8 @@ namespace XeGTAO
       // Denoise bind and draw loop
       bool ao_flipflop = false;
       {
-         ThreadCount::denoise_pass.Update(ShaderDefineInfo::XEGTAO_THREADS_DENOISE, is_half_res);
-         thread_x_effective = ThreadCount::denoise_pass.x_half;
-         thread_y_effective = ThreadCount::denoise_pass.y;
+         thread_x_effective = ThreadCount::def_8.x_half;
+         thread_y_effective = ThreadCount::def_8.y;
       }
       for (int i = 0; i < denoise_count_effective; i++)
       {
@@ -7260,7 +7253,9 @@ public:
 
          ShaderDefineInfo::UIDropDown(ShaderDefineInfo::XEGTAO_NOISE, "Noise", { "Unclamped Phases", "Static", "2 Phases", "3 Phases", "4 Phases", "5 Phases", "6 Phases", "7 Phases", "8 Phases (Better for 120 FPS?)" }, "Noise allow samples to evenly shoot out in all direction.\nInstead of staying static, allow noise to jitter so that it can perceptually mask individual grains.");
          
-         ShaderDefineInfo::UIDropDown(ShaderDefineInfo::XEGTAO_CHECKBOARD, "Rate", { "Full", "Half (Unnoticeable, especially 120 FPS?)", "Quarter (Rather unusable smearing.)" }, "Render every other pixel to save performance."); 
+         ShaderDefineInfo::UIDropDown(ShaderDefineInfo::XEGTAO_CHECKBOARD, "Rate", { "Full", "Half (Unnoticeable, especially 120 FPS?)", "Quarter (Rather unusable smearing.)" }, "Render every other pixel to save performance.");
+
+         if (UserSettingsMisc::imgui_show_advanced) ShaderDefineInfo::UIDropDown(ShaderDefineInfo::XEGTAO_THREADS_AO, "Threads: GTAO Compute", { "8", "16" }, "Thread groups for compute shaders.\n16 should be fastest, but maybe 8 is better for your PC?");
          
          ImGui::NewLine();
          DrawColoredSubHeader("Half Resolution");
@@ -7276,16 +7271,6 @@ public:
             if (!is_halfres_after) ImGui::BeginDisabled();
             ShaderDefineInfo::UIToggleCheckmark(ShaderDefineInfo::XEGTAO_UPSAMPLE, "Joint Bilateral Upsample", "Upscale AO results while preventing leaks by using the spatial difference between half vs full res.");
             if (!is_halfres_after) ImGui::EndDisabled();
-         }
-
-         if (UserSettingsMisc::imgui_show_advanced)
-         {
-            ImGui::NewLine();
-            DrawColoredSubHeader("Thread Groups");
-            ShaderDefineInfo::UIDropDown(ShaderDefineInfo::XEGTAO_THREADS_NORMALSGEN, "Threads: Normals Generation", { "8", "16" }, "Thread groups for compute shaders.\nDefault should be fastest.");
-            ShaderDefineInfo::UIDropDown(ShaderDefineInfo::XEGTAO_THREADS_NORMALSSMOOTH, "Threads: Normals Smoothing", { "8", "16" }, "Thread groups for compute shaders.\nDefault should be fastest.");
-            ShaderDefineInfo::UIDropDown(ShaderDefineInfo::XEGTAO_THREADS_AO, "Threads: GTAO", { "8", "16" }, "Thread groups for compute shaders.\nDefault should be fastest.");
-            ShaderDefineInfo::UIDropDown(ShaderDefineInfo::XEGTAO_THREADS_DENOISE, "Threads: Denoise", { "8", "16" }, "Thread groups for compute shaders.\nDefault should be fastest.");
          }
 
          if (UserSettingsMisc::imgui_show_advanced)
