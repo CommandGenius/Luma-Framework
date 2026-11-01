@@ -7223,9 +7223,7 @@ public:
             reshade::set_config_value(runtime, NAME, XeGTAO::reshadesave_disallow_for_npr, XeGTAO::disallow_for_npr);
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("When MegaMix NPR detected, this will not draw.\n\n(This doesn't discern the style of a scene, e.g. \"Two-Faced Lovers\".\nAll 3D will still get occlusion.)");
-
-         // TODO: presets
-
+         
          ImGui::NewLine();
          DrawColoredSubHeader("Parameters");
          
@@ -7400,8 +7398,8 @@ public:
 
          ImGui::BeginDisabled(ShaderDefineInfo::Get(ShaderDefineInfo::CUSTOM_ESM_DEPTH_NEW_SIZE) <= 2);
          {
-            ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_ESM_DEPTH_FILTERREDUCE, "Characters: Blur Sample Count Reduce", { "0 (Perfect Extension Soft)", "1 (Essentially Vanilla Soft)", "2", "3 (Harder, but SSS may posterize)", "4", "5", "6", "7 (If not already, SSS is broken)" },
-               "(The raw texture is duplicated for character rendering (i.e. SSS).)\n\nIf > 2048x2048, sample count are mathematically increased for the higher resolution, but it's nice to be frugal.\nHowever, too frugal and shadows are no longer soft as intended, leading SSS to posterize.");
+            ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_ESM_DEPTH_FILTERREDUCE, "Characters: Blur Reduce", { "0 (Perfect Extension Soft)", "1 (Essentially Vanilla Soft)", "2", "3 (Harder, but SSS may break)", "4", "5", "6", "7 (If not already, SSS is broken)" },
+               "(The raw texture is duplicated for character rendering (i.e. SSS).)\n\nIf > 2048x2048, sample count are mathematically increased for the higher resolution, but it's nice to be frugal.\nHowever, too frugal and shadows are no longer soft as intended, making SSS break by exposed low poly models.");
          }
          ImGui::EndDisabled();
          
@@ -7954,28 +7952,12 @@ public:
 
       // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
       
-      //show advanced
-      if (!UserSettingsMisc::imgui_show_advanced)
-      {
-         ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
-         if (ImGui::Checkbox("Show Advanced Settings", &UserSettingsMisc::imgui_show_advanced))
-            reshade::set_config_value(runtime, NAME, "UIIsAdvanced", UserSettingsMisc::imgui_show_advanced);
-         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Reveal hidden complex settings requiring more reading.");
-
-#if DEVELOPMENT
-         ImGui::Separator();
-#endif
-         return;
-      }
-      else
-      {
-         ImGui::Separator();
-      }
+      if (UserSettingsMisc::imgui_show_advanced) ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
       
       // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
 
       ImGui::PushID("###LUTBlowoutReduction");
-      if (!is_sdr && DrawCollapsingHeaderEnabledColored("LUT Blowout Reduction", ShaderDefineInfo::GetB(ShaderDefineInfo::CUSTOM_LUT_BLOWOUT_GAUSSIAN)))
+      if (UserSettingsMisc::imgui_show_advanced && !is_sdr && DrawCollapsingHeaderEnabledColored("LUT Blowout Reduction", ShaderDefineInfo::GetB(ShaderDefineInfo::CUSTOM_LUT_BLOWOUT_GAUSSIAN)))
       {
          DrawColoredSubHeader("Regain chrominance for HDR highlights by creating bias on blowout curve via gaussian weighted sampling.");
          
@@ -8001,7 +7983,7 @@ public:
       // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
 
       //HDR Tonemapper Settings
-      if (!is_sdr && ImGui::CollapsingHeader("HDR Display-mapping"))
+      if (UserSettingsMisc::imgui_show_advanced && !is_sdr && ImGui::CollapsingHeader("HDR Display-mapping"))
       {
          DrawColoredSubHeader("Controls how colors are compressed down to fit display.");
 
@@ -8048,7 +8030,7 @@ public:
       
       // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
       
-      if (!is_sdr && DrawCollapsingHeaderEnabledColored("Fake BT2020 (Gamut Expansion)", ShaderDefineInfo::GetB(ShaderDefineInfo::CUSTOM_FAKEBT2020)))
+      if (UserSettingsMisc::imgui_show_advanced && !is_sdr && DrawCollapsingHeaderEnabledColored("Fake BT2020 (Gamut Expansion)", ShaderDefineInfo::GetB(ShaderDefineInfo::CUSTOM_FAKEBT2020)))
       {
          DrawColoredSubHeader("Fake saturation to from gamma tomfoolery.");
 
@@ -8073,7 +8055,7 @@ public:
       }
 
       // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
-      if (!is_sdr && DrawCollapsingHeaderEnabledColored("HDR Color Grading", ShaderDefineInfo::GetB(ShaderDefineInfo::CUSTOM_COLORGRADE)))
+      if (UserSettingsMisc::imgui_show_advanced && !is_sdr && DrawCollapsingHeaderEnabledColored("HDR Color Grading", ShaderDefineInfo::GetB(ShaderDefineInfo::CUSTOM_COLORGRADE)))
       {
          DrawColoredSubHeader("RenoDX luminance color grading, like user audio equalizer but for color.");
          
@@ -8130,7 +8112,7 @@ public:
 
       // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
       
-      if (!is_sdr && ImGui::CollapsingHeader("Fake/Auto HDR (DEPRECATED)"))
+      if (UserSettingsMisc::imgui_show_advanced && !is_sdr && ImGui::CollapsingHeader("Fake/Auto HDR (DEPRECATED)"))
       {
          DrawColoredSubHeader("Now deprecated, this fakes HDR extension for some SDR content.");
          
@@ -8211,7 +8193,7 @@ public:
       }
       
       // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
-      if (ImGui::CollapsingHeader("Miscellaneous Pipeline Options (Debug)"))
+      if (UserSettingsMisc::imgui_show_advanced && ImGui::CollapsingHeader("Miscellaneous Pipeline Options (Debug)"))
       {
          DrawColoredSubHeader("Various debug views.");
          
@@ -8240,7 +8222,7 @@ public:
       }
       
       // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
-      if (ImGui::CollapsingHeader("(Debug) Info"))
+      if (UserSettingsMisc::imgui_show_advanced && ImGui::CollapsingHeader("(Debug) Info"))
       {
          DrawColoredSubHeader("Various debug values/stats.");
          
@@ -8292,7 +8274,7 @@ public:
       // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
 
 #if DEVELOPMENT
-      if (ImGui::CollapsingHeader("(DEVELOPMENT) LUTBuilderScan"))
+      if (UserSettingsMisc::imgui_show_advanced && ImGui::CollapsingHeader("(DEVELOPMENT) LUTBuilderScan"))
       {
          // for each list scanned_lut_res
          ImGui::Text("LUT Resource Handles:");
@@ -8308,21 +8290,29 @@ public:
       ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
       
       if (ImGui::Checkbox("Show Advanced Settings", &UserSettingsMisc::imgui_show_advanced)) reshade::set_config_value(runtime, NAME, "UIIsAdvanced", UserSettingsMisc::imgui_show_advanced);
-      if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Reveal hidden complex settings requiring more reading.");
+      if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Reveal settings for power users.");
 
       if (ImGui::Checkbox("Hide README", &UserSettingsMisc::imgui_readme_done)) reshade::set_config_value(runtime, NAME, "UIIsReadmeDone", UserSettingsMisc::imgui_readme_done);
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Show README again.");
 
-      if (ImGui::Button("Panic Reset")) OnInitSwapchain_ResetEvent(false);
-      if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Act as if the game has changed resolution, resetting the states of enhancements.");
-   }
+      if (ImGui::Button("Panic Reset (Use only at Main Menu!)")) OnInitSwapchain_ResetEvent(false);
+      if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("If anything acts up, try this to reset all modules as if the game restarted or resolution changed.");
+
+      if (ImGui::CollapsingHeader("Uninstall Instructions"))
+      {
+         DrawColoredSubHeader("Just delete 2 files and 1 folder.");
+
+         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Close the game.");
+         ImGui::Bullet(); ImGui::SameLine(); if (ImGui::Button("Open the game folder.")) PathOrURLOpen(Installation::path_exe.string().c_str());
+         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Delete \"dxgi.dll\"");
+         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Delete \"Luma-Project Diva Mega Mix.addon\"");
+         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Delete \"Luma\"");
+      }
 
 #if DEVELOPMENT
-   void DrawImGuiDevSettings(DeviceData& device_data) override
-   {
       ImGui::Separator();
-   }
 #endif
+   }
    
    void PrintImGuiAbout() override
    {
