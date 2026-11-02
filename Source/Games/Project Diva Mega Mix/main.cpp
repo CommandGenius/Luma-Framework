@@ -64,6 +64,7 @@ void OpenFilePath(const char* path)
    std::string command = "open -R \"" + std::string(path) + "\"";
    std::system(command.c_str());
 #endif
+   // System::OpenExplorerToFile(path);
 }
    
 bool IsModEnabled() {return custom_shaders_enabled || !ignore_indirect_upgraded_textures || !ignore_upgraded_samplers;}
@@ -152,17 +153,18 @@ namespace Installation // support for mod manager's config.toml
    std::filesystem::path path_shaders;
    // bool is_backup_loaded_this_launch = false;
 
+   std::filesystem::path GetModulePath(HMODULE hModule)
+   {
+      wchar_t path[MAX_PATH] = {};
+      GetModuleFileNameW(hModule, path, MAX_PATH);
+      return std::filesystem::path(path).parent_path();
+   }
+
    void OnDLLMainEarly(HMODULE hModule)
    {
       // paths
-      auto GetThisModulePath = [](HMODULE hModule) -> std::filesystem::path
-      {
-         wchar_t path[MAX_PATH] = {};
-         GetModuleFileNameW(hModule, path, MAX_PATH);
-         return std::filesystem::path(path).parent_path();
-      };
-      path_exe = GetThisModulePath(nullptr);
-      path_addon = GetThisModulePath(hModule);
+      path_exe = GetModulePath(nullptr);
+      path_addon = GetModulePath(hModule);
       
       auto path_shaders_core = GetShadersRootPath();
       auto path_shaders_module = path_addon; path_shaders_module.append("Luma");
@@ -204,6 +206,45 @@ namespace Installation // support for mod manager's config.toml
       {
          MessageBoxA(nullptr, "Success!\n\nPlease restart the game and find the new \"DC\" ReShade tab.", "Luma Display Commander Install", MB_OK | MB_ICONINFORMATION);
       }
+   }
+
+   // config.toml reader (AI slop wow)
+   std::unordered_map<std::string, std::string> ReadConfigToml(const std::filesystem::path& path)
+   {
+      std::unordered_map<std::string, std::string> config;
+      std::ifstream file(path);
+      if (!file.is_open()) return config;
+
+      while (!file.eof())
+      {
+         std::string line;
+         std::getline(file, line);
+         // trim whitespace
+         line.erase(line.begin(), std::find_if(line.begin(), line.end(), [](unsigned char ch) { return !std::isspace(ch); }));
+         line.erase(std::find_if(line.rbegin(), line.rend(), [](unsigned char ch) { return !std::isspace(ch); }).base(), line.end());
+         // skip comments and empty lines
+         if (line.empty() || line[0] == '#') continue;
+         // parse key = value
+         auto pos = line.find('=');
+         if (pos == std::string::npos) continue;
+         std::string key = line.substr(0, pos);
+         std::string value = line.substr(pos + 1);
+         // trim whitespace from key and value
+         key.erase(key.begin(), std::find_if(key.begin(), key.end(), [](unsigned char ch) { return !std::isspace(ch); }));
+         key.erase(std::find_if(key.rbegin(), key.rend(), [](unsigned char ch) { return !std::isspace(ch); }).base(), key.end());
+         value.erase(value.begin(), std::find_if(value.begin(), value.end(), [](unsigned char ch) { return !std::isspace(ch); }));
+         value.erase(std::find_if(value.rbegin(), value.rend(), [](unsigned char ch) { return !std::isspace(ch); }).base(), value.end());
+         // to lowercase
+         std::transform(key.begin(), key.end(), key.begin(), [](unsigned char c) { return std::tolower(c); });
+         std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) { return std::tolower(c); });
+         // remove quotes from value if present
+         if (!value.empty() && value.front() == '"' && value.back() == '"')
+            value = value.substr(1, value.size() - 2);
+         
+         config[key] = value;
+      }
+
+      return config;
    }
 }
 
@@ -7212,6 +7253,114 @@ public:
       }
 
       ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
+
+      ImGui::PushID("###FPSLimiter");
+      if (DrawCollapsingHeaderEnabledColored("FPS Limiter",
+         HighFPS::enabled || HighFPS::has_high_frame_rate_mod || HighFPS::has_display_commander,
+         (!UserSettingsMisc::imgui_readme_done && (!HighFPS::has_high_frame_rate_mod && !HighFPS::has_display_commander))))
+      {
+         DrawColoredSubHeader("Continuously patches the game's memory to set a new limit.");
+
+         bool is_draw_settings = true;
+         if (HighFPS::has_high_frame_rate_mod)
+         {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 1.f, 0.4f, 1.f));
+            ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("\"HighFrameRate.dll\" detected.");
+            ImGui::PopStyleColor();
+
+            static bool read = false;
+            static bool is_vsync = false;
+            static int limit = 0;
+            static std::filesystem::path path = {};
+            [[unlikely]] if (!read)
+            {
+               read = true;
+               auto hModule = GetModuleHandleA("HighFrameRate.dll");
+               if (hModule)
+               {
+                  path = Installation::GetModulePath(hModule);
+                  path.append("config.toml");
+                  reshade::log::message(reshade::log::level::info, std::format("HighFrameRate.dll config.toml path: {}", path.string().c_str()).c_str());
+                  auto config = Installation::ReadConfigToml(path);
+                  if (config.contains("vsync"))
+                  {
+                     char b = config["vsync"][0];
+                     is_vsync = b == '1' || b == 't';
+                  }
+                  if (config.contains("fps_limit"))
+                  {
+                     std::string limit_str = config["fps_limit"];
+                     try { limit = std::stoi(limit_str); }
+                     catch (...) {}
+                  }
+               }
+            }
+
+            if (!path.empty())
+            {
+               ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("VSync: %s", std::to_string(is_vsync));
+               ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Limit: %d", limit);
+               ImGui::Bullet(); ImGui::SameLine(); if (ImGui::Button("Open config.toml")) OpenFilePath(path.string().c_str());
+            }
+            else
+            {
+               ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.f));
+               ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Couldn't read config.toml");
+               ImGui::PopStyleColor();
+            }
+            
+            is_draw_settings = false;
+         }
+         if (HighFPS::has_display_commander)
+         {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 1.f, 0.4f, 1.f));
+            ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("\"zzz_display_commander_megamix.addon64\" detected.");
+            ImGui::PopStyleColor();
+            ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Find the \"DC\" tab!");
+            is_draw_settings = false;
+         }
+         
+         if (is_draw_settings)
+         {
+            if (ImGui::Checkbox("Enabled", &HighFPS::enabled))
+            {
+               reshade::set_config_value(runtime, NAME, "HighFPS_enabled", HighFPS::enabled);
+               if (!HighFPS::enabled) HighFPS::Unpatch();
+            }
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Continuously patches the game's memory to set a new limit.");
+      
+            ImGui::BeginDisabled(!HighFPS::enabled);
+            {
+               if (ImGui::Checkbox("Limit Menus", &HighFPS::menu_clamp))
+                  reshade::set_config_value(runtime, NAME, "HighFPS_menu_clamp", HighFPS::menu_clamp);
+               if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Limit menus to 60FPS.\n\nBtw, unclamping allows for faster UI navigation and decreased load times (loading has frame rate dependent camera spinning phase to warm up level).");
+      
+               if (ImGui::SliderInt("New Limit", &HighFPS::limit, 0, 1000))
+               {
+                  if (HighFPS::limit > 0 && HighFPS::limit < 15) HighFPS::limit = 15; //minimum 15 FPS
+                  reshade::set_config_value(runtime, NAME, "HighFPS_limit", HighFPS::limit);
+               }
+               if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Set 0 for none, though this usually causes problems.");
+            }
+            ImGui::EndDisabled();
+            
+            ImGui::NewLine();
+            DrawColoredSubHeader("Better Solutions");
+            
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 1.f, 0.5f, 1.f));
+            ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Even at 60FPS, users have reported issues without an advanced solution.");
+            ImGui::PopStyleColor();
+            
+            ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Consider:"); ImGui::SameLine();
+            if (ImGui::Button("High Frame Rate by RagdollClash (GameBanana)")) OpenURL("https://gamebanana.com/mods/380955");
+            
+            ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Consider:"); ImGui::SameLine();
+            if (ImGui::Button("Display Commander MegaMix+ Fork (GitHub 1-Click Install)")) Installation::InstallDisplayCommander();
+         }
+      }
+      ImGui::PopID();
+      
+      // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
       
       if (DrawCollapsingHeaderEnabledColored("Gamma", (!is_sdr && ShaderDefineInfo::GetB(ShaderDefineInfo::CUSTOM_GAMMACORRECT22)) || (ShaderDefineInfo::GetB(ShaderDefineInfo::CUSTOM_HDTVREC709_1))))
       {
@@ -7930,14 +8079,54 @@ public:
                ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_DWR_SIGMA, "Blur Softness", { "-4", "-3", "-2", "-1", "0", "1", "2", "3", "4", "5" },
                   "Change the gaussian kernel's sigma to control the material's roughness.");
             }
-
-            if (ImGui::Checkbox("X Song Pack \"reflect_full\" Override", &DuplicateWorldReflections::override_full_resolution))
-               reshade::set_config_value(runtime, NAME, DuplicateWorldReflections::reshadesave_override_full_resolution, DuplicateWorldReflections::override_full_resolution);
-            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Allow override even for full resolution path.\n\n(This also skips its Depth of Field, which is honestly a waste.)");
-            DrawResetButton(DuplicateWorldReflections::override_full_resolution, DuplicateWorldReflections::override_full_resolution_def, DuplicateWorldReflections::reshadesave_override_full_resolution, runtime);
          }
          ImGui::EndDisabled();
 
+         ImGui::NewLine();
+         ImGui::PushID("###DuplicateWorldReflectionsXSongPack");
+         DrawColoredSubHeader("X Song Pack: \"reflect_full\"");
+         if (ImGui::Checkbox("Override", &DuplicateWorldReflections::override_full_resolution))
+            reshade::set_config_value(runtime, NAME, DuplicateWorldReflections::reshadesave_override_full_resolution, DuplicateWorldReflections::override_full_resolution);
+         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Allow override even for the full resolution path.\nSave big performance if reduced.\n\n(This also skips its Depth of Field, which is noticeable waste.)");
+         DrawResetButton(DuplicateWorldReflections::override_full_resolution, DuplicateWorldReflections::override_full_resolution_def, DuplicateWorldReflections::reshadesave_override_full_resolution, runtime);
+         {
+            static bool read = false;
+            static std::filesystem::path path = {};
+            static bool enabled = false;
+            [[unlikely]] if (!read)
+            {
+               read = true;
+               auto hModule = GetModuleHandleA("XSongPack.dll");
+               if (hModule)
+               {
+                  path = Installation::GetModulePath(hModule);
+                  path.append("config.toml");
+                  reshade::log::message(reshade::log::level::info, std::format("XSongPack.dll config.toml path: {}", path.string().c_str()).c_str());
+                  auto config = Installation::ReadConfigToml(path);
+                  if (config.contains("reflect_full"))
+                  {
+                     char b = config["reflect_full"][0];
+                     enabled = b == '1' || b == 't';
+                  }
+               }
+            }
+
+            if (!path.empty())
+            {
+               ImGui::PushStyleColor(ImGuiCol_Text, enabled ? ImVec4(0.4f, 1.f, 0.4f, 1.f) : ImVec4(1.f, 0.5f, 0.5f, 1.f));
+               ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("reflect_full: %s", std::to_string(enabled));
+               ImGui::PopStyleColor();
+               ImGui::SameLine(); if (ImGui::Button("Open config.toml")) OpenFilePath(path.string().c_str());
+            }
+            else
+            {
+               ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.f));
+               ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("XSongPack.dll not enabled, or couldn't read config.toml");
+               ImGui::PopStyleColor();
+            }
+         }
+         ImGui::PopID();
+         
          if (UserSettingsMisc::imgui_show_advanced)
          {
             ImGui::NewLine();
@@ -8055,68 +8244,6 @@ public:
             ImGui::SetTooltip("Skips text (at least subtitles) after scene rendering.");
          DrawResetButton(UserSettingsMisc::is_draw_game_ui_text, true, "IsUIText", runtime);
       }
-
-      // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
-      ImGui::PushID("###FPSLimiter");
-      if (DrawCollapsingHeaderEnabledColored("FPS Limiter", HighFPS::enabled))
-      {
-         DrawColoredSubHeader("Continuously patches the game's memory to set a new limit.");
-
-         bool is_draw_settings = true;
-         if (HighFPS::has_high_frame_rate_mod)
-         {
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 1.f, 0.5f, 1.f));
-            ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("HighFrameRate.dll detected, so this is disabled.");
-            ImGui::PopStyleColor();
-            is_draw_settings = false;
-         }
-         if (HighFPS::has_display_commander)
-         {
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 1.f, 0.5f, 1.f));
-            ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Display Commander MegaMix+ Fork detected, so this is disabled.");
-            ImGui::PopStyleColor();
-            is_draw_settings = false;
-         }
-         
-         if (is_draw_settings)
-         {
-            if (ImGui::Checkbox("Enabled", &HighFPS::enabled))
-            {
-               reshade::set_config_value(runtime, NAME, "HighFPS_enabled", HighFPS::enabled);
-               if (!HighFPS::enabled) HighFPS::Unpatch();
-            }
-            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Continuously patches the game's memory to set a new limit.");
-      
-            ImGui::BeginDisabled(!HighFPS::enabled);
-            {
-               if (ImGui::Checkbox("Limit Menus", &HighFPS::menu_clamp))
-                  reshade::set_config_value(runtime, NAME, "HighFPS_menu_clamp", HighFPS::menu_clamp);
-               if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Limit menus to 60FPS.\n\nBtw, unclamping allows for faster UI navigation and decreased load times (loading has frame rate dependent camera spinning phase to warm up level).");
-      
-               if (ImGui::SliderInt("New Limit", &HighFPS::limit, 0, 1000))
-               {
-                  if (HighFPS::limit > 0 && HighFPS::limit < 15) HighFPS::limit = 15; //minimum 15 FPS
-                  reshade::set_config_value(runtime, NAME, "HighFPS_limit", HighFPS::limit);
-               }
-               if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Set 0 for none, though this usually causes problems.");
-            }
-            ImGui::EndDisabled();
-            
-            ImGui::NewLine();
-            DrawColoredSubHeader("Better Solutions");
-            
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 1.f, 0.5f, 1.f));
-            ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("This hack is naive, as users have reported desyncing issues.");
-            ImGui::PopStyleColor();
-            
-            ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Consider:"); ImGui::SameLine();
-            if (ImGui::Button("High Frame Rate by RagdollClash (GameBanana)")) OpenURL("https://gamebanana.com/mods/380955");
-            
-            ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Consider:"); ImGui::SameLine();
-            if (ImGui::Button("Display Commander MegaMix+ Fork (GitHub 1-Click Install)")) Installation::InstallDisplayCommander();
-         }
-      }
-      ImGui::PopID();
 
       // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
       
@@ -8534,6 +8661,7 @@ public:
       ImGui::BulletText("Bug Hunter: ChugTheCreativityJuice");
       ImGui::BulletText("Bug Hunter: gin");
       ImGui::BulletText("Bug Hunter: NevaArt3");
+      ImGui::BulletText("Bug Hunter: DolanNorth");
 
       ImGui::NewLine();
       
