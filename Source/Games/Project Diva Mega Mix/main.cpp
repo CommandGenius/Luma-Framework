@@ -7178,14 +7178,14 @@ public:
 
          // OutputHandling
          auto output_mode = OutputHandling::IsHDR10() ? "HDR10 10-bit" : OutputHandling::IsSDR8bit() ? "SDR 8-bit" : "scRGB 16-bit";
-         ImGui::BulletText("Output: %s (Display HDR Supported: %s) (Display HDR Enabled: %s)", output_mode, std::to_string(hdr_supported_display), std::to_string(hdr_enabled_display));
+         ImGui::BulletText("Output: %s (Display HDR Supported: %s) (Display HDR Enabled: %s)", output_mode, hdr_supported_display ? "true" : "false", hdr_enabled_display ? "true" : "false");
 #if DEVELOPMENT
          ImGui::BulletText("Luma Display Composition: %s", std::to_string(force_disable_display_composition));
 #endif
 
          // Render Resolution
          ASSERT_MSG(RenderTracker::res_main_color_size.x == RenderTracker::res_main_depth_size.x && RenderTracker::res_main_color_size.y == RenderTracker::res_main_depth_size.y, "Color and Depth resolution mismatch!");
-         ImGui::BulletText("Resolution: (Render: %dx%d) -> (Composite UI: %dx%d) -> (Output: %dx%d)",
+         ImGui::BulletText("Resolution: (Scene: %dx%d) -> (UI: %dx%d) -> (Output: %dx%d)",
             RenderTracker::res_main_color_size.x, RenderTracker::res_main_color_size.y,
             RenderTracker::res_main_ui_size.x, RenderTracker::res_main_ui_size.y,
             (uint)cb_luma_global_settings.SwapchainSize.x, (uint)cb_luma_global_settings.SwapchainSize.y);
