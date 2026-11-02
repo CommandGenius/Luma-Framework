@@ -593,7 +593,7 @@ namespace ShaderDefineInfo
          {"CUSTOM_ESM_DEPTH_SIGMAINCREASE", '0', true, false, "Reduce shadow map gaussian blur steps.", 9},
          {"CUSTOM_ESM_COLOR_SIGMA", '4', true, false, "Reduce shadow map gaussian blur steps.", 9},
          {"CUSTOM_DWR_SIGMA", '4', true, false, "Duplicate World Reflections sigma.", 9},
-         {"CUSTOM_SSS_HQBLUR", '0', true, false, "Increase SSS blur taps.", 1},
+         {"CUSTOM_SSS_HQBLUR", '0', true, false, "Increase SSS blur taps.", 2},
          {"CUSTOM_SSS_EYEDODGE", '0', true, false, "Eyes won't use SSS resolve results.", 1},
          {"CUSTOM_PERCHANNELLUMAEMULATE", '1', true, false, "Emulate luminance loss from LDR per-channel tonemapping on single channel bright colors.", 1},
          {"XEGTAO_SLICECOUNT", '1', true, false, "XeGTAO samples.", 6},
@@ -7660,10 +7660,13 @@ public:
                               "\n"
                               "\n(The first sample is from full res, while the rest is from downsample for performance.)");
 
-         ImGui::BeginDisabled(!SSS::enabled);
-         ShaderDefineInfo::UIToggleCheckmark(ShaderDefineInfo::CUSTOM_SSS_HQBLUR, "Extreme Quality Blur", "Greatly increase sample count by adding in-between sample positions,"
-                                                                                                                        "\nsuppressing the rare cases where SSS generate strips from bright rim light.");
-         ImGui::EndDisabled();
+         if (UserSettingsMisc::imgui_show_advanced)
+         {
+            ImGui::BeginDisabled(!SSS::enabled);
+            ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_SSS_HQBLUR, "Blur Quality", { "Normal", "Extra Extreme", "Extra Extreme w/ Unrolled Weights (may hang game)" },
+               "GREATLY INCREASE sample count by adding in-between sample positions,\nsuppressing the rare cases where SSS generate strips from bright rim light.\n\n[Extra Extreme w/ Unrolled Weights]\nThis compiles the shader for speed, precomputing weights, but your game may hang trying.");
+            ImGui::EndDisabled();
+         }
          
          ImGui::BeginDisabled(!SSS::enabled);
          if (ImGui::SliderFloat("Eye Dodge", &cb_luma_global_settings.GameSettings.SSSEyeDodge, 0.f, 1.f))

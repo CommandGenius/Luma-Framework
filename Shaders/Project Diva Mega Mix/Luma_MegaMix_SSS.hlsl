@@ -333,7 +333,7 @@ void sss0(
   // radius
   r1.xy = g_param.zw * g_texel_size.xy * GS.SSSRadius; // scaling this up makes SSS wider & more apparent
 
-#if SSS0_NOT_NATIVE_SHADER == 0 && CUSTOM_SSS_HQBLUR == 1
+#if SSS0_NOT_NATIVE_SHADER == 0 && CUSTOM_SSS_HQBLUR > 0
   // accumulators: color and weight
   float3 centerW = g_coef[0].xyz + 1e-5; // safe
   float3 aC = r0.xyz * centerW;
@@ -418,28 +418,35 @@ void sss0(
   gD1 = (L3 - L1) / 8.0;
   gD2 = ((L5 - L3) / 16.0 - gD1) / 24.0;
 
-  /* [unroll] */ for (int y = 0; y <= 5; y++)
-  /* [unroll] */ for (int x = 0; x <= 5; x++)
+#if CUSTOM_SSS_HQBLUR > 1
+  [unroll]
+#endif
+  for (int y = 0; y <= 5; y++)
   {
-    if (x == 0 && y == 0) continue;
-    float3 g = g_coef[6 * y + x].xyz; // weight
-    if (max(g.x, max(g.y, g.z)) < 1e-5) continue; // skip low weights
-    float3 corr = min(g / max(FitW(x * x + y * y), 1e-30), 4.0); // pin fit to table at the cell center
-
-    for (int sy = -1; sy <= 1; sy += 2)
-    for (int sx = -1; sx <= 1; sx += 2)
+#if CUSTOM_SSS_HQBLUR > 1
+    [unroll] 
+#endif
+    for (int x = 0; x <= 5; x++)
     {
-      if ((x == 0 && sx < 0) || (y == 0 && sy < 0)) continue; // skip same sample
-      for (int b = -1; b <= 1; b += 2)
-      for (int a = -1; a <= 1; a += 2)
+      if (x == 0 && y == 0) continue;
+      float3 g = g_coef[6 * y + x].xyz; // weight
+      if (max(g.x, max(g.y, g.z)) < 1e-5) continue; // skip low weights
+      float3 corr = min(g / max(FitW(x * x + y * y), 1e-30), 4.0); // pin fit to table at the cell center
+
+      for (int sy = -1; sy <= 1; sy += 2)
+      for (int sx = -1; sx <= 1; sx += 2)
       {
-        float2 p = float2(sx * x + a * 0.25, sy * y + b * 0.25);
-        float3 w = FitW(dot(p, p)) * corr * 0.25;
-        SampleSSS(p, v1, r1.xy, w, aC, aW);
+        if ((x == 0 && sx < 0) || (y == 0 && sy < 0)) continue; // skip same sample
+        for (int b = -1; b <= 1; b += 2)
+        for (int a = -1; a <= 1; a += 2)
+        {
+          float2 p = float2(sx * x + a * 0.25, sy * y + b * 0.25);
+          float3 w = FitW(dot(p, p)) * corr * 0.25;
+          SampleSSS(p, v1, r1.xy, w, aC, aW);
+        }
       }
     }
   }
-
   aC /= aW; // normalize
   o0.xyz = aC * g_color.xyz; // tint
 #else
