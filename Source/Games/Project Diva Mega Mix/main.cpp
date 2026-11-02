@@ -234,7 +234,7 @@ namespace RenderTracker // partial
       res_main_color_size = {0,0}; res_main_depth_size = {0,0}; res_main_ui_size = {0,0};
    }
    
-   // State (cleared on present) //
+   // State (reset on present) //
    uint32_t ps_prev;
 
    uint64_t last_cleared_rtv_handle = 0;
@@ -249,7 +249,8 @@ namespace RenderTracker // partial
       SSSState_Skipped,
       SSSState_Resolved,
    };
-   SSSState sss_state = SSSState_Unknown;
+   SSSState sss_state = SSSState_Unknown; // if NPR, this is late at detecting
+   SSSState sss_state_imgui = sss_state;
    bool IsSSSResolvedOrSkipped() { return sss_state >= SSSState_Skipped; }
    bool IsSSSSetup() { return sss_state == SSSState_Setup; }
    bool IsSSSSkipped() { return sss_state == SSSState_Skipped; }
@@ -259,14 +260,21 @@ namespace RenderTracker // partial
    bool is_drawn_to_swapchain = false; // when shader draws
    bool is_drawn_to_autoexposure0 = false; // when shader draws
 
+   bool is_drawn_npr_contour = false; // because tonemap may not be NPR variant
+   bool is_drawn_npr_contour_prev = false;
+   bool IsDrawnNPRContourLastFrame() { return is_drawn_npr_contour_prev; }
+
    void Reset_State()
    {
       ps_prev = 0;
       count_main_color_clears = 0;
       count_main_color_clears_draws_after = 0;
+      sss_state_imgui = sss_state;
       sss_state = SSSState_Unknown;
       is_drawn_to_swapchain = false;
       is_drawn_to_autoexposure0 = false;
+      is_drawn_npr_contour_prev = is_drawn_npr_contour;
+      is_drawn_npr_contour = false;
    }
 }
 
@@ -327,7 +335,7 @@ namespace TonemapInfo
    bool GetIsDrawnTonemapOrFinal(int v) { return v & (FlagDrawnTonemap | FlagDrawnFinal); }
    bool GetIsDrawnTonemapButNotFinal(int v) { return v & FlagDrawnTonemap && !(v & FlagDrawnFinal); }
 
-   bool GetIsPBRFromIndex(int i) { return i <= 4; }
+   bool GetIsPBRFromIndex(int i) { return i <= 4; } // TODO: don't use this! Use RenderTracker::IsDrawnNPRContourLastFrame() instead
    
    const char* const TonemapDebugInfo[] = {
       "Complex", //0
@@ -432,6 +440,8 @@ namespace ShaderHashesLists
    bool IsSSSSetupShader(uint32_t ps) { return ps == SSSSetup0 || ps == SSSSetup1; }
    constexpr uint32_t WaterWavesNormals0 = 0xE83D0A67;
    constexpr uint32_t GlassEyes = 0xDFD687E0; // (aka glass_eye_ps & glass_eyes_ps, 2 because paired VS can be diff)
+   constexpr uint32_t NPRContour0 = 0xD3B7A039; // after 3D is rendered
+   constexpr uint32_t NPRContour1 = 0x8E7027B5; // paired with SSS (rare, only Megpoid mod PVs)
    
    const std::unordered_map<uint32_t, uint8_t> Tonemaps = {
       { 0x7CFCDF1A, 0  }, //complex
@@ -2587,7 +2597,7 @@ namespace SSS
             }
 
             // NPR_Contour (legit unused by vanilla game. only like 2 PVs from Megpoid has this.)
-            if (ps == 0x8E7027B5) // "nprcontour1" 
+            if (ps == ShaderHashesLists::NPRContour1) // "nprcontour1" 
             {
                // create new aux
                [[unlikely]] if (!current_item->new_aux_srv)
@@ -5956,10 +5966,10 @@ namespace DuplicateWorldReflections
       // gatekeeps:
       if (!enabled) return result;
       if (DEVELOPMENT && !IsModEnabled()) return result;
-      if (!RenderTracker::IsMainColorBeingOrHasBeenDrawnTo()) return result; // reflections are always drawn after SSS
+      if (!RenderTracker::IsDrawnNPRContourLastFrame() && !RenderTracker::IsMainColorBeingOrHasBeenDrawnTo()) return result; // reflections are always drawn after SSS (but only if not NPR garbo skipping everything)
 
       // force state: stop waiting
-      if (state == Wait && RenderTracker::IsMainColorBeingOrHasBeenDrawnTo()) state = Draw;
+      if (state == Wait && (RenderTracker::IsDrawnNPRContourLastFrame() || RenderTracker::IsMainColorBeingOrHasBeenDrawnTo())) state = Draw; // TODO: IsDrawnNPRContourLastFrame() is bandaid since we can't detect usage if trashy NPR
       // force state: relevant (Copy wasn't prev) 4Tap Blur draw
       if (ps == 0x4E2A88FE && RenderTracker::ps_prev != 0x58A712B5) state = Blur;
       
@@ -6301,6 +6311,13 @@ namespace RenderTracker // partial
          case SSSState_Skipped:
          case SSSState_Resolved:
             break;
+      }
+
+      // is_drawn_npr_contour
+      if (IsMainColorBeingOrHasBeenDrawnTo() && (ps == ShaderHashesLists::NPRContour0 || ps == ShaderHashesLists::NPRContour1))
+      {
+         ASSERT_MSG(!is_drawn_npr_contour, "RenderTracker: Unexpected, is_drawn_npr_contour already true!");
+         is_drawn_npr_contour = true;
       }
 
       // find depth
@@ -7101,13 +7118,13 @@ public:
          float stops = log2(cb_luma_global_settings.ScenePeakWhite / cb_luma_global_settings.ScenePaperWhite);
          std::string label_hdr_stops_plural = stops > 1.f ? "s" : "";
          std::string label_hdr_stops_sign = stops > 0.f ? "+" : "";
-         ImGui::BulletText(std::format("HDR Stop{}: {}{:.2f}", label_hdr_stops_plural, label_hdr_stops_sign, stops).c_str());
+         ImGui::BulletText(std::format("HDR Stop{} from Peak & Paper White: {}{:.2f}", label_hdr_stops_plural, label_hdr_stops_sign, stops).c_str());
 
          // OutputHandling
+         auto output_mode = OutputHandling::IsHDR10() ? "HDR10 10-bit" : OutputHandling::IsSDR8bit() ? "SDR 8-bit" : "scRGB 16-bit";
+         ImGui::BulletText("Output: %s (Display HDR Supported: %s) (Display HDR Enabled: %s)", output_mode, std::to_string(hdr_supported_display), std::to_string(hdr_enabled_display));
 #if DEVELOPMENT
-         ImGui::BulletText("Output: %s (Luma Display Composition: %s)", OutputHandling::IsHDR10() ? "HDR10 (10-bit)" : OutputHandling::IsSDR8bit() ? "SDR (8-bit)" : "scRGB (16-bit)", force_disable_display_composition ? "Disabled" : "Enabled");
-#else
-         ImGui::BulletText("Output: %s", OutputHandling::IsHDR10() ? "HDR10 (10-bit)" : OutputHandling::IsSDR8bit() ? "SDR (8-bit)" : "scRGB (16-bit)");
+         ImGui::BulletText("Luma Display Composition: %s", std::to_string(force_disable_display_composition));
 #endif
 
          // Render Resolution
@@ -8420,6 +8437,12 @@ public:
 
          std::string s11 = "OS Time ms: " + std::to_string(TimerTimestamp::ms_curr);
          ImGui::BulletText(s11.c_str());
+
+         std::string s12 = "SSS State: " + std::to_string(RenderTracker::sss_state_imgui);
+         ImGui::BulletText(s12.c_str());
+
+         std::string s13 = "NPR Contour Drawn: " + std::to_string(RenderTracker::IsDrawnNPRContourLastFrame());
+         ImGui::BulletText(s13.c_str());
       }
       
       // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
