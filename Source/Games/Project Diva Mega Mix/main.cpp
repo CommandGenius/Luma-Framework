@@ -442,6 +442,8 @@ namespace ShaderHashesLists
    constexpr uint32_t GlassEyes = 0xDFD687E0; // (aka glass_eye_ps & glass_eyes_ps, 2 because paired VS can be diff)
    constexpr uint32_t NPRContour0 = 0xD3B7A039; // after 3D is rendered
    constexpr uint32_t NPRContour1 = 0x8E7027B5; // paired with SSS (rare, only Megpoid mod PVs)
+   constexpr uint32_t Blur4Tap = 0x4E2A88FE;
+   constexpr uint32_t CopyWithMultiplier = 0x58A712B5;
    
    const std::unordered_map<uint32_t, uint8_t> Tonemaps = {
       { 0x7CFCDF1A, 0  }, //complex
@@ -462,6 +464,15 @@ namespace ShaderHashesLists
    constexpr uint32_t UISpritesHPBarDelta = 0xD0162389;
    constexpr uint32_t UISpritesText = 0x7F6C8EC7;
    constexpr uint32_t ToSwapchain = 0xA200B172;
+
+   void OnInit()
+   {
+#if DEVELOPMENT
+      forced_shader_names.emplace(Blur4Tap, "4tapblur");
+      forced_shader_names.emplace(CopyWithMultiplier, "copywithmultiplier");
+      forced_shader_names.emplace(WaterWavesNormals0, "waterwavesnormals");
+#endif
+   }
 }
 
 namespace ShaderDefineInfo
@@ -4858,11 +4869,11 @@ namespace ShadowMap
             state = DepthExpand0;
          
          // skip: Tex B Downsample0
-         else if (state == Silhouette && ps == 0x58A712B5)
+         else if (state == Silhouette && ps == ShaderHashesLists::CopyWithMultiplier)
             state = TexBDownsample0;
 
          // skip: Tex A not used
-         else if (state == TexADownsample0 && ps != 0x58A712B5)
+         else if (state == TexADownsample0 && ps != ShaderHashesLists::CopyWithMultiplier)
             state = SSSSetup;
          
          // backtrack: X Song Pack 100% res duplicate world reflections SSS again
@@ -4874,7 +4885,7 @@ namespace ShadowMap
          }
          
          // backtrack: X Song Pack 100% res duplicate world reflections usage again
-         else if (state == Done && (ps == ShaderHashesLists::ToSwapchain || ps == 0x4E2A88FE) && !TonemapInfo::GetIsDrawnTonemapOrFinal(cb_luma_global_settings.GameSettings.TonemapInfo))
+         else if (state == Done && (ps == ShaderHashesLists::ToSwapchain || ps == ShaderHashesLists::Blur4Tap) && !TonemapInfo::GetIsDrawnTonemapOrFinal(cb_luma_global_settings.GameSettings.TonemapInfo))
          {
             ASSERT_MSG(RenderTracker::IsMainColorBeingOrHasBeenDrawnTo(), "ShadowMap: OnDrawOrDispatchOverride() backtrack to MainRender, but RenderTracker::IsMainColorBeingOrHasBeenDrawnTo() false");
             state = MainRender;
@@ -4958,7 +4969,7 @@ namespace ShadowMap
          case TexBDownsample0:
          {
             // gatekeep: ps
-            if (ps != 0x58A712B5) break;
+            if (ps != ShaderHashesLists::CopyWithMultiplier) break;
             ASSERT_MSG(!state_texb_drawn, "ShadowMap: TexBDownsample0 state_texb_used_this_frame true already! Is there a Tex C?");
             ASSERT_MSG(state_silhouette_draw_count > 0, "ShadowMap: TexBDownsample0 state_shadow_cast_count 0! There are no shadows to downsample!");
 
@@ -5000,7 +5011,7 @@ namespace ShadowMap
          case TexB4TapBlur0:
          {
             // gatekeep: ps
-            if (ps != 0x4E2A88FE)
+            if (ps != ShaderHashesLists::Blur4Tap)
             {
                ASSERT_MSG(false, "ShadowMap: TexB4TapBlur0 ps not 0x4E2A88FE!?!?!");
                break;
@@ -5019,7 +5030,7 @@ namespace ShadowMap
          case TexBCopy0:
          {
             // gatekeep: ps
-            if (ps != 0x58A712B5)
+            if (ps != ShaderHashesLists::CopyWithMultiplier)
             {
                ASSERT_MSG(false, "ShadowMap: TexBCopy0 ps not 0x58A712B5!?!?!");
                break;
@@ -5202,7 +5213,7 @@ namespace ShadowMap
          case TexADownsample0:
          {
             // gatekeep: ps
-            if (ps != 0x58A712B5)
+            if (ps != ShaderHashesLists::CopyWithMultiplier)
             {
                ASSERT_MSG(false, "ShadowMap: TexADownsample0 ps not 0x58A712B5!?!?!");
                break;
@@ -5296,7 +5307,7 @@ namespace ShadowMap
          case Tex4TapBlur0:
          {
             // gatekeep: ps
-            if (ps != 0x4E2A88FE)
+            if (ps != ShaderHashesLists::Blur4Tap)
             {
                ASSERT_ONCE_MSG(false, "ShadowMap: Tex4TapBlur0 ps not 0x4E2A88FE!?!?!");
                if (DEVELOPMENT) reshade::log::message(reshade::log::level::warning, std::format("ShadowMap: Tex4TapBlur0 ps not 0x4E2A88FE!?!?!. ps={:#010X}", ps).c_str());
@@ -5316,7 +5327,7 @@ namespace ShadowMap
          case TexACopy0:
          {
             // gatekeep: ps
-            if (ps != 0x58A712B5)
+            if (ps != ShaderHashesLists::CopyWithMultiplier)
             {
                ASSERT_MSG(false, "ShadowMap: TexACopy0 ps not 0x58A712B5!?!?!");
                break;
@@ -5971,7 +5982,7 @@ namespace DuplicateWorldReflections
       // force state: stop waiting
       if (state == Wait && (RenderTracker::IsDrawnNPRContourLastFrame() || RenderTracker::IsMainColorBeingOrHasBeenDrawnTo())) state = Draw; // TODO: IsDrawnNPRContourLastFrame() is bandaid since we can't detect usage if trashy NPR
       // force state: relevant (Copy wasn't prev) 4Tap Blur draw
-      if (ps == 0x4E2A88FE && RenderTracker::ps_prev != 0x58A712B5) state = Blur;
+      if (ps == ShaderHashesLists::Blur4Tap && RenderTracker::ps_prev != ShaderHashesLists::CopyWithMultiplier) state = Blur;
       
       switch (state) // denotes next expected
       {
@@ -6109,7 +6120,7 @@ namespace DuplicateWorldReflections
          }
          case Copy:
          {
-            ASSERT_MSG(ps == 0x58A712B5, "DuplicateWorldReflections: Unexpected, Copy shader 0x58A712B5 not next!"); // this is always next
+            ASSERT_MSG(ps == ShaderHashesLists::CopyWithMultiplier, "DuplicateWorldReflections: Unexpected, Copy shader 0x58A712B5 not next!"); // this is always next
             ASSERT_MSG(Resources::handles_current->IsValid(), "DuplicateWorldReflections: Copy, current_item not valid");
 
             // upsample
@@ -6565,6 +6576,9 @@ public:
 
       // force same version before load to not reset settings
       reshade::set_config_value(nullptr, NAME, "Version", Globals::VERSION); // TODO: WHY IS THIS TROLLING?!?!?
+
+      // ShaderHashLists
+      ShaderHashesLists::OnInit();
 
       // OutputHandling
       OutputHandling::OnInit();
