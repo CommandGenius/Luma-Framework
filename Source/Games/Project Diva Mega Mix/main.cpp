@@ -7539,6 +7539,10 @@ public:
       if (DrawCollapsingHeaderEnabledColored("Ambient Occlusion", XeGTAO::enabled))
       {
          DrawColoredSubHeader("Insert a pass for indirect shadowing.");
+
+         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 1.f, 0.5f, 1.f));
+         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Requires Future Tone PBR (primarily SSS) to initialize.");
+         ImGui::PopStyleColor();
          
          ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.f));
          ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("There are errors (e.g. occlusion in fog & sky).\nI might account per PV if it's too noticeable.");
