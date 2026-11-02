@@ -7097,6 +7097,7 @@ public:
 
       reshade::get_config_value(runtime, NAME, "UIIsAdvanced", UserSettingsMisc::imgui_show_advanced);
       reshade::get_config_value(runtime, NAME, "UIIsReadmeDone", UserSettingsMisc::imgui_readme_done);
+      if (!UserSettingsMisc::imgui_readme_done) MessageBoxA(nullptr, "Remember to find the Luma tab after opening ReShade!\n\n- Open ReShade: HOME\n- Cycle through tabs: CTRL+TAB", "Luma", MB_OK | MB_ICONINFORMATION);
       
       HighFPS::OnLoad(runtime);
 
@@ -8091,7 +8092,7 @@ public:
          DrawColoredSubHeader("X Song Pack: \"reflect_full\"");
          if (ImGui::Checkbox("Override", &DuplicateWorldReflections::override_full_resolution))
             reshade::set_config_value(runtime, NAME, DuplicateWorldReflections::reshadesave_override_full_resolution, DuplicateWorldReflections::override_full_resolution);
-         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Allow override even for the full resolution path.\nSave big performance if reduced.\n\n(This also skips its Depth of Field, which is noticeable waste.)");
+         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Allow override even for the full resolution path.\n\nConsider using this at low resolution over turning reflect_full off as it usually skips all reflections!\n\n(This also skips its Depth of Field, which is an unnoticeable waste.)");
          DrawResetButton(DuplicateWorldReflections::override_full_resolution, DuplicateWorldReflections::override_full_resolution_def, DuplicateWorldReflections::reshadesave_override_full_resolution, runtime);
          {
             static bool read = false;
