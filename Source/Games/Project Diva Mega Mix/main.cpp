@@ -274,6 +274,8 @@ namespace RenderTracker // partial
       res_main_ui.reset(); res_main_ui_tex.reset(); res_main_ui_handle = 0;
       res_main_color_size = {0,0}; res_main_depth_size = {0,0}; res_main_ui_size = {0,0};
    }
+
+   bool HasAllOriginalResources() { return res_main_color && res_main_depth && res_main_ui; }
    
    // State (reset on present) //
    uint32_t ps_prev;
@@ -323,6 +325,7 @@ namespace UserSettingsMisc
 {
    bool is_draw_game_ui = true;
    bool is_draw_game_ui_text = true;
+   bool is_skip_until_ui = false;
    
    bool imgui_readme_done = false;
    bool imgui_show_advanced = false;
@@ -6842,17 +6845,44 @@ public:
       // ++
       SwapchainInfo::change_count++;
    }
-
+   
    DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
-   {      
+   {
+      
+      // original shaders
       auto vs = original_shader_hashes.vertex_shaders[0];
       auto ps = original_shader_hashes.pixel_shaders[0];
       auto cs = original_shader_hashes.compute_shaders[0]; // should always be 0
-
       ShaderHashesLists::OnDrawOrDispatch(native_device, native_device_context, cmd_list_data, device_data, vs, ps, cs);
 
       // RenderTracker
       RenderTracker::OnDrawOrDispatchOverride(native_device, native_device_context, cmd_list_data, device_data, ps);
+
+      auto IsDrawFinal = [&]() -> bool { return ps == ShaderHashesLists::Final || SSAA::IsFinalDrawing(native_device, native_device_context, cmd_list_data, device_data, ps); };
+
+      // is_skip_until_ui
+      [[unlikely]] if (UserSettingsMisc::is_skip_until_ui && RenderTracker::HasAllOriginalResources())
+      {
+         // detect final
+         if (!TonemapInfo::GetDrawnFinal(cb_luma_global_settings.GameSettings.TonemapInfo))
+         {
+            if (IsDrawFinal())
+            {
+               // drawn final
+               cb_luma_global_settings.GameSettings.TonemapInfo = TonemapInfo::SetDrawnFinalTrue(cb_luma_global_settings.GameSettings.TonemapInfo);
+               device_data.has_drawn_main_post_processing = true;
+               device_data.cb_luma_global_settings_dirty = true;
+
+               // clear ui color
+               constexpr float clear_color[4] = { 0.f, 0.f, 0.f, 1.f };
+               ComPtr<ID3D11RenderTargetView> rtv;
+               native_device_context->OMGetRenderTargets(1, rtv.put(), nullptr);
+               native_device_context->ClearRenderTargetView(rtv.get(), clear_color);
+            }
+
+            return DrawOrDispatchOverrideType::Skip;
+         }
+      }
 
       // LUTBuilderScan
 #if DEVELOPMENT
@@ -6938,8 +6968,7 @@ public:
       }
       // FINAL /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
       
-      if (!TonemapInfo::GetDrawnFinal(cb_luma_global_settings.GameSettings.TonemapInfo) &&
-         (ps == ShaderHashesLists::Final || SSAA::IsFinalDrawing(native_device, native_device_context, cmd_list_data, device_data, ps)))
+      if (!TonemapInfo::GetDrawnFinal(cb_luma_global_settings.GameSettings.TonemapInfo) && IsDrawFinal())
       {
          // drawn
          cb_luma_global_settings.GameSettings.TonemapInfo = TonemapInfo::SetDrawnFinalTrue(cb_luma_global_settings.GameSettings.TonemapInfo);
@@ -7169,6 +7198,7 @@ public:
       
       reshade::get_config_value(runtime, NAME, "IsUI", UserSettingsMisc::is_draw_game_ui);
       reshade::get_config_value(runtime, NAME, "IsUIText", UserSettingsMisc::is_draw_game_ui_text);
+      reshade::get_config_value(runtime, NAME, "IsSkipUntilUI", UserSettingsMisc::is_skip_until_ui);
       reshade::get_config_value(runtime, NAME, "UITransparency", cb_luma_global_settings.GameSettings.UITransparency);
 
       reshade::get_config_value(runtime, NAME, "UIIsAdvanced", UserSettingsMisc::imgui_show_advanced);
@@ -8315,8 +8345,10 @@ public:
       // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
 
       ImGui::PushID("###UI");
-      if (DrawCollapsingHeaderEnabledColored("UI", !UserSettingsMisc::is_draw_game_ui || !UserSettingsMisc::is_draw_game_ui_text))
+      if (DrawCollapsingHeaderEnabledColored("UI", !UserSettingsMisc::is_draw_game_ui || !UserSettingsMisc::is_draw_game_ui_text || UserSettingsMisc::is_skip_until_ui || ShaderDefineInfo::GetB(ShaderDefineInfo::CUSTOM_SEPARABLEUI)))
       {
+         DrawColoredSubHeader("Allow UI to draw?");
+         
          if (ImGui::Checkbox("Draw UI", &UserSettingsMisc::is_draw_game_ui))
             reshade::set_config_value(runtime, NAME, "IsUI", UserSettingsMisc::is_draw_game_ui);
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
@@ -8329,10 +8361,16 @@ public:
             ImGui::SetTooltip("Skips text (at least subtitles) after scene rendering.");
          DrawResetButton(UserSettingsMisc::is_draw_game_ui_text, true, "IsUIText", runtime);
 
+         if (ImGui::Checkbox("Skip Until UI", &UserSettingsMisc::is_skip_until_ui))
+            reshade::set_config_value(runtime, NAME, "IsSkipUntilUI", UserSettingsMisc::is_skip_until_ui);
+         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("Skip all rendering until the first UI draw.");
+         DrawResetButton(UserSettingsMisc::is_skip_until_ui, false, "IsSkipUntilUI", runtime);
+
          ImGui::NewLine();
          DrawColoredSubHeader("Draws UI on a separate texture, allowing for processing.");
 
-         bool is_sepui = ShaderDefineInfo::UIToggleCheckmark(ShaderDefineInfo::CUSTOM_SEPARABLEUI, "Enable (WIP)", "Draws UI on a separate texture.");
+         bool is_sepui = ShaderDefineInfo::UIToggleCheckmark(ShaderDefineInfo::CUSTOM_SEPARABLEUI, "Enable", "Draws UI on a separate texture.");
 
          ImGui::BeginDisabled(!is_sepui);
          if (ImGui::SliderFloat("Transparency", &cb_luma_global_settings.GameSettings.UITransparency, 0.f, 1.f))
