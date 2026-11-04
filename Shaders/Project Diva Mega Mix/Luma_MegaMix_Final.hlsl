@@ -111,6 +111,9 @@ void main(
 #if CUSTOM_PS4BLUR_1 > 0
   , out float3 o1 : SV_Target1 //r11b11g10f
 #endif
+#if CUSTOM_SEPARABLEUI > 0
+  , out float4 o2 : SV_Target2 
+#endif
 )
 {
   #if CUSTOM_SSAA == 0 || CUSTOM_SSAA_FILTER == 0
@@ -150,7 +153,10 @@ void main(
   #endif
 
   #if CUSTOM_SDR_1 == 1
-    o0.xyz = x;
+      o0.xyz = x;
+    #if CUSTOM_SEPARABLEUI > 0
+      o2 = o0; // blit
+    #endif
     return;
   #endif
 
@@ -176,6 +182,9 @@ void main(
   x = EncodeIntermediate(x);
 
   o0.xyz = x;
+  #if CUSTOM_SEPARABLEUI > 0
+    o2 = o0; // blit
+  #endif
   return;
 }
 

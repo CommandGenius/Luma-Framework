@@ -97,6 +97,11 @@ namespace CB
       float NPRContourRadius;
       float SSSEyeDodge;
       float SkinSpecular;
+
+      float UITransparency;
+      float p1;
+      float p2;
+      float p3;
    };
    
    struct LumaGameData

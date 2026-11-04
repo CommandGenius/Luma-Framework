@@ -8,6 +8,7 @@ cbuffer Quad : register(b0)
 
 SamplerState g_sampler_s : register(s0);
 Texture2D<float4> g_texture : register(t0);
+Texture2D<float4> g_texture_sepui : register(t1); // CUSTOM_SEPARABLEUI
 
 #include "./common1.hlsl"
 
@@ -15,14 +16,14 @@ float3 ToSwapchain(float3 x, float2 v1)
 {
   x = max(0, x);
 
-  // #if CUSTOM_UITRANSPARENCY > 0
-  // {
-  //   float3 colorWithUi = UIOutputTex.SampleLevel(g_sampler_s, v1.xy, g_texture_lod.x).xyz;
-  //   colorWithUi = max(0, colorWithUi);
-  //   float3 uiOnly = colorWithUi - x;
-  //   x += uiOnly * GS.UITransparency;
-  // }
-  // #endif
+  #if CUSTOM_SEPARABLEUI > 0
+  {
+    float3 colorWithUi = g_texture_sepui.SampleLevel(g_sampler_s, v1.xy, g_texture_lod.x).xyz;
+    colorWithUi = max(0, colorWithUi);
+    float3 uiOnly = colorWithUi - x;
+    x += uiOnly * GS.UITransparency;
+  }
+  #endif
 
   #if CUSTOM_PROGRESSBAR > 0
   {

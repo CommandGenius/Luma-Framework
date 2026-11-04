@@ -6699,6 +6699,8 @@ public:
 
       default_luma_global_game_settings.NPRContourStrength = cb_luma_global_settings.GameSettings.NPRContourStrength = 1.0f;
       default_luma_global_game_settings.NPRContourRadius = cb_luma_global_settings.GameSettings.NPRContourRadius = 1.0f;
+      
+      default_luma_global_game_settings.UITransparency = cb_luma_global_settings.GameSettings.UITransparency = 1.0f;
 
 #if DEVELOPMENT
       // debug_draw_options edit
@@ -6904,7 +6906,7 @@ public:
          return DrawOrDispatchOverrideType::None;
       }
 
-      // SeperableUI /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+      // SeparableUI /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
       SeparableUI::OnDrawOrDispatch(native_device, native_device_context, cmd_list_data, device_data, ps);
       
@@ -7094,6 +7096,7 @@ public:
       
       reshade::get_config_value(runtime, NAME, "IsUI", UserSettingsMisc::is_draw_game_ui);
       reshade::get_config_value(runtime, NAME, "IsUIText", UserSettingsMisc::is_draw_game_ui_text);
+      reshade::get_config_value(runtime, NAME, "UITransparency", cb_luma_global_settings.GameSettings.UITransparency);
 
       reshade::get_config_value(runtime, NAME, "UIIsAdvanced", UserSettingsMisc::imgui_show_advanced);
       reshade::get_config_value(runtime, NAME, "UIIsReadmeDone", UserSettingsMisc::imgui_readme_done);
@@ -7675,6 +7678,19 @@ public:
          DrawResetButton(cb_luma_global_settings.GameSettings.SSSEyeDodge, default_luma_global_game_settings.SSSEyeDodge, "SSSEyeDodge", runtime);
          ImGui::EndDisabled();
          
+         if (ImGui::SliderFloat("Skin Specular", &cb_luma_global_settings.GameSettings.SkinSpecular, 0.f, 2.f))
+            reshade::set_config_value(runtime, NAME, "SkinSpecular", cb_luma_global_settings.GameSettings.SkinSpecular);
+         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Specular intensity.");
+         DrawResetButton(cb_luma_global_settings.GameSettings.SkinSpecular, default_luma_global_game_settings.SkinSpecular, "SkinSpecular", runtime);
+
+         if (UserSettingsMisc::imgui_show_advanced)
+         {
+            ImGui::BeginDisabled(!SSS::enabled);
+            ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_SSS_HQBLUR, "Quality", { "Normal", "Extra Extreme", "Extra Extreme w/ Unrolled Weights (may hang game)" },
+               "GREATLY INCREASE sample count by adding in-between sample positions,\nsuppressing the rare cases where SSS generate strips from bright rim light.\n\n[Extra Extreme w/ Unrolled Weights]\nThis compiles the shader for speed, precomputing weights, but your game may hang trying.");
+            ImGui::EndDisabled();
+         }
+         
          if (UserSettingsMisc::imgui_show_advanced)
          {
             if (ImGui::SliderFloat("SSS Radius", &cb_luma_global_settings.GameSettings.SSSRadius, 0.5f, 1.5f))
@@ -8238,6 +8254,7 @@ public:
       
       // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
 
+      ImGui::PushID("###UI");
       if (DrawCollapsingHeaderEnabledColored("UI", !UserSettingsMisc::is_draw_game_ui || !UserSettingsMisc::is_draw_game_ui_text))
       {
          if (ImGui::Checkbox("Draw UI", &UserSettingsMisc::is_draw_game_ui))
@@ -8251,6 +8268,18 @@ public:
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("Skips text (at least subtitles) after scene rendering.");
          DrawResetButton(UserSettingsMisc::is_draw_game_ui_text, true, "IsUIText", runtime);
+
+         ImGui::NewLine();
+         DrawColoredSubHeader("Draws UI on a separate texture, allowing for processing.");
+
+         bool is_sepui = ShaderDefineInfo::UIToggleCheckmark(ShaderDefineInfo::CUSTOM_SEPARABLEUI, "Enable (WIP)", "Draws UI on a separate texture.");
+
+         ImGui::BeginDisabled(!is_sepui);
+         if (ImGui::SliderFloat("Transparency", &cb_luma_global_settings.GameSettings.UITransparency, 0.f, 1.f))
+            reshade::set_config_value(runtime, NAME, "UITransparency", cb_luma_global_settings.GameSettings.UITransparency);
+         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("UI transparency multiplier.\n(Idk, this feature is dumb and will prob get removed.)");
+         DrawResetButton(cb_luma_global_settings.GameSettings.UITransparency, default_luma_global_game_settings.UITransparency, "UITransparency", runtime);
+         ImGui::EndDisabled();
       }
 
       // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
