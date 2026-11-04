@@ -574,20 +574,23 @@ namespace ShaderHashesLists
 #if DEVELOPMENT
       [[unlikely]] if (vs != 0 && !forced_shader_names.contains(vs))
       {
-         ASSERT_ONCE_MSG(false, "ShaderValidation: Foreign VS detected!");
+         ASSERT_MSG(false, "ShaderValidation: Foreign VS detected!");
          reshade::log::message(reshade::log::level::error, std::format("ShaderValidation: Foreign VS detected! Hash: 0x{:08X}", vs).c_str());
+         forced_shader_names.emplace(vs, "Unknown VS");
       }
 
       [[unlikely]] if (ps != 0 && !forced_shader_names.contains(ps))
       {
-         ASSERT_ONCE_MSG(false, "ShaderValidation: Foreign PS detected!");
+         ASSERT_MSG(false, "ShaderValidation: Foreign PS detected!");
          reshade::log::message(reshade::log::level::error, std::format("ShaderValidation: Foreign PS detected! Hash: 0x{:08X}", ps).c_str());
+         forced_shader_names.emplace(ps, "Unknown PS");
       }
 
       [[unlikely]] if (cs != 0)
       {
-         ASSERT_ONCE_MSG(false, "ShaderValidation: Foreign CS detected!");
+         ASSERT_MSG(false, "ShaderValidation: Foreign CS detected!");
          reshade::log::message(reshade::log::level::error, std::format("ShaderValidation: Foreign CS detected! Hash: 0x{:08X}", cs).c_str());
+         forced_shader_names.emplace(cs, "Unknown CS");
       }
 #endif
    }
