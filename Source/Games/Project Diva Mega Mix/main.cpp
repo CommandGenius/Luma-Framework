@@ -506,12 +506,86 @@ namespace ShaderHashesLists
    constexpr uint32_t UISpritesText = 0x7F6C8EC7;
    constexpr uint32_t ToSwapchain = 0xA200B172;
 
+#if DEVELOPMENT
+   void ForcedShaderNamesReadCSV()
+   {
+      constexpr const char* csv_name = "MegaMix_ForcedShaderNames.csv";
+      auto path_csv = GetShadersRootPath().append(Globals::GAME_NAME).append(csv_name);
+      if (!std::filesystem::exists(path_csv)) return;
+         
+      // open reader
+      auto file = std::ifstream(path_csv);
+      if (!file.is_open()) return;
+
+      // while next line
+      std::string line;
+      std::getline(file, line); // skip header
+      while (std::getline(file, line))
+      {
+         // hash, name count, names
+         // e.g. "0xC43756B7,3,stage_blinnas_vs stage_blinnpas_vs stage_blinns_vs"
+         std::istringstream line_stream(line);
+
+         // read hash
+         std::string hash_str;
+         if (!std::getline(line_stream, hash_str, ',')) continue;
+         uint32_t hash = std::stoul(hash_str, nullptr, 16);
+
+         // read name count
+         std::string name_count_str;
+         if (!std::getline(line_stream, name_count_str, ',')) continue;
+         int name_count = std::stoi(name_count_str);
+
+         // read names
+         std::string names_str;
+         if (!std::getline(line_stream, names_str)) continue;
+         std::string names_cstr = names_str.c_str();
+
+         // if count > 0, append count as prefix
+         // if (name_count > 0)
+         {
+            names_cstr = "[" + std::to_string(name_count) + "] " + names_str;
+         }
+
+         // emplace
+         forced_shader_names.emplace(hash, names_cstr.c_str());
+      }
+
+      // clean
+      file.close();
+   }
+#endif
+
    void OnInit()
    {
 #if DEVELOPMENT
-      forced_shader_names.emplace(Blur4Tap, "4tapblur");
-      forced_shader_names.emplace(CopyWithMultiplier, "copywithmultiplier");
-      forced_shader_names.emplace(WaterWavesNormals0, "waterwavesnormals");
+      // forced_shader_names.emplace(Blur4Tap, "4tapblur");
+      // forced_shader_names.emplace(CopyWithMultiplier, "copywithmultiplier");
+      // forced_shader_names.emplace(WaterWavesNormals0, "waterwavesnormals");
+      ForcedShaderNamesReadCSV();
+#endif
+   }
+
+   void OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, uint32_t vs, uint32_t ps, uint32_t cs)
+   {
+#if DEVELOPMENT
+      [[unlikely]] if (vs != 0 && !forced_shader_names.contains(vs))
+      {
+         ASSERT_ONCE_MSG(false, "ShaderValidation: Foreign VS detected!");
+         reshade::log::message(reshade::log::level::error, std::format("ShaderValidation: Foreign VS detected! Hash: 0x{:08X}", vs).c_str());
+      }
+
+      [[unlikely]] if (ps != 0 && !forced_shader_names.contains(ps))
+      {
+         ASSERT_ONCE_MSG(false, "ShaderValidation: Foreign PS detected!");
+         reshade::log::message(reshade::log::level::error, std::format("ShaderValidation: Foreign PS detected! Hash: 0x{:08X}", ps).c_str());
+      }
+
+      [[unlikely]] if (cs != 0)
+      {
+         ASSERT_ONCE_MSG(false, "ShaderValidation: Foreign CS detected!");
+         reshade::log::message(reshade::log::level::error, std::format("ShaderValidation: Foreign CS detected! Hash: 0x{:08X}", cs).c_str());
+      }
 #endif
    }
 }
@@ -6771,12 +6845,11 @@ public:
 
    DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
    {      
+      auto vs = original_shader_hashes.vertex_shaders[0];
       auto ps = original_shader_hashes.pixel_shaders[0];
-      // auto cs = original_shader_hashes.compute_shaders[0];
+      auto cs = original_shader_hashes.compute_shaders[0]; // should always be 0
 
-      // // skip not ps
-      // [[unlikely]]
-      // if (ps == 0) return DrawOrDispatchOverrideType::None;
+      ShaderHashesLists::OnDrawOrDispatch(native_device, native_device_context, cmd_list_data, device_data, vs, ps, cs);
 
       // RenderTracker
       RenderTracker::OnDrawOrDispatchOverride(native_device, native_device_context, cmd_list_data, device_data, ps);
@@ -7662,14 +7735,6 @@ public:
             ImGui::SetTooltip("Make the screen-space SSS algorithm full resolution, stopping its bottle neck on shadow maps."
                               "\n"
                               "\n(The first sample is from full res, while the rest is from downsample for performance.)");
-
-         if (UserSettingsMisc::imgui_show_advanced)
-         {
-            ImGui::BeginDisabled(!SSS::enabled);
-            ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_SSS_HQBLUR, "Blur Quality", { "Normal", "Extra Extreme", "Extra Extreme w/ Unrolled Weights (may hang game)" },
-               "GREATLY INCREASE sample count by adding in-between sample positions,\nsuppressing the rare cases where SSS generate strips from bright rim light.\n\n[Extra Extreme w/ Unrolled Weights]\nThis compiles the shader for speed, precomputing weights, but your game may hang trying.");
-            ImGui::EndDisabled();
-         }
          
          ImGui::BeginDisabled(!SSS::enabled);
          if (ImGui::SliderFloat("Eye Dodge", &cb_luma_global_settings.GameSettings.SSSEyeDodge, 0.f, 1.f))
@@ -7698,11 +7763,6 @@ public:
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Radius / reach of the effect.");
             DrawResetButton(cb_luma_global_settings.GameSettings.SSSRadius, default_luma_global_game_settings.SSSRadius, "SSSRadius", runtime);
          }
-         
-         if (ImGui::SliderFloat("Skin Specular", &cb_luma_global_settings.GameSettings.SkinSpecular, 0.f, 2.f))
-            reshade::set_config_value(runtime, NAME, "SkinSpecular", cb_luma_global_settings.GameSettings.SkinSpecular);
-         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Specular intensity.");
-         DrawResetButton(cb_luma_global_settings.GameSettings.SkinSpecular, default_luma_global_game_settings.SkinSpecular, "SkinSpecular", runtime);
 
          ImGui::NewLine();
          DrawColoredSubHeader("MegaMix Contour: Added edges mimicking drawn art.");
@@ -8281,6 +8341,7 @@ public:
          DrawResetButton(cb_luma_global_settings.GameSettings.UITransparency, default_luma_global_game_settings.UITransparency, "UITransparency", runtime);
          ImGui::EndDisabled();
       }
+      ImGui::PopID();
 
       // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
       
