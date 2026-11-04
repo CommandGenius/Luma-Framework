@@ -7201,7 +7201,7 @@ public:
       
       reshade::get_config_value(runtime, NAME, "IsUI", UserSettingsMisc::is_draw_game_ui);
       reshade::get_config_value(runtime, NAME, "IsUIText", UserSettingsMisc::is_draw_game_ui_text);
-      reshade::get_config_value(runtime, NAME, "IsSkipUntilUI", UserSettingsMisc::is_skip_until_ui);
+      reshade::get_config_value(runtime, NAME, "IsSkipUntilUI", UserSettingsMisc::is_skip_until_ui); if (ShaderDefineInfo::GetB(ShaderDefineInfo::CUSTOM_SEPARABLEUI)) UserSettingsMisc::is_skip_until_ui = false;
       reshade::get_config_value(runtime, NAME, "UITransparency", cb_luma_global_settings.GameSettings.UITransparency);
 
       reshade::get_config_value(runtime, NAME, "UIIsAdvanced", UserSettingsMisc::imgui_show_advanced);
@@ -8364,11 +8364,13 @@ public:
             ImGui::SetTooltip("Skips text (at least subtitles) after scene rendering.");
          DrawResetButton(UserSettingsMisc::is_draw_game_ui_text, true, "IsUIText", runtime);
 
+         ImGui::BeginDisabled(ShaderDefineInfo::GetB(ShaderDefineInfo::CUSTOM_SEPARABLEUI));
          if (ImGui::Checkbox("Skip Until UI", &UserSettingsMisc::is_skip_until_ui))
             reshade::set_config_value(runtime, NAME, "IsSkipUntilUI", UserSettingsMisc::is_skip_until_ui);
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("Skip all rendering until the first UI draw.");
          DrawResetButton(UserSettingsMisc::is_skip_until_ui, false, "IsSkipUntilUI", runtime);
+         ImGui::EndDisabled();
 
          ImGui::NewLine();
          DrawColoredSubHeader("Draws UI on a separate texture, allowing for processing.");
@@ -8383,6 +8385,7 @@ public:
          ImGui::EndDisabled();
       }
       ImGui::PopID();
+      if (ShaderDefineInfo::GetB(ShaderDefineInfo::CUSTOM_SEPARABLEUI)) UserSettingsMisc::is_skip_until_ui = false; // force off
 
       // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
       
