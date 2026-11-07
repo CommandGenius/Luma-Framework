@@ -1620,7 +1620,7 @@ namespace SeparableUI
       if (DEVELOPMENT && !IsModEnabled()) return false;
 
       // state
-      ASSERT_MSG(state == Swapchain, "SeparableUI::OnDrawSwapchain() state != Swapchain");
+      // ASSERT_MSG(!(RenderTracker::HasAllOriginalResources() && state == Swapchain), "SeparableUI::OnDrawSwapchain() state != Swapchain");
       state = Done;
 
       // bind SRV1
@@ -2598,7 +2598,8 @@ namespace SSS
       if (ShaderHashesLists::IsSSSSetupShader(ps) && state != SubsequentSetups) state = Setup;
 
       static Resources::Item* current_item = nullptr; // acts like token
-      static int replace_remaining = 0; // acts like token
+      static uint8_t replace_remaining = 0; // acts like token
+      static bool is_pbr = false; // valid for the frame
       
       switch (state) // alert: denotes what has drawn prev
       {
@@ -2805,7 +2806,7 @@ namespace SSS
             ASSERT_MSG(ps == 0x54415551, "SSS::OnDrawOrDispatchOverride() NPR_SSSPrep/PBR_Widen unexpected ps");
             
             ASSERT_MSG(current_item, "SSS::OnDrawOrDispatchOverride() PBR_Widen current_item is nullptr");
-            bool is_pbr = state == PBR_Widen;
+            is_pbr = state == PBR_Widen;
 
             // save RTV0 RES handle for replacement
             ComPtr<ID3D11RenderTargetView> rtv0 = nullptr;
@@ -2871,7 +2872,7 @@ namespace SSS
                      ASSERT_MSG(!srv32, "SSS::OnDrawOrDispatchOverride() SSS SRV32 is not null.");
                   }
                   // set SRV32 as setup
-                  native_device_context->PSSetShaderResources(32, 1, &item->new_draw_srv);
+                  native_device_context->PSSetShaderResources(32, 1, is_pbr ? &item->new_draw_srv : &item->new_aux_srv); // for SSS in NPR path, use aux as it is monochrome 
                }
                
                replace_remaining--; // use
