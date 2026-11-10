@@ -17,17 +17,7 @@
 
 #define cmp -
 
-#if CUSTOM_LUTBUILDER_COLORSPACE == 1 && CUSTOM_SDR == 0
-  #define LUTBUILDER_FAITHFUL 1
-#else
-  #define LUTBUILDER_FAITHFUL 0
-#endif
 #if CUSTOM_LUTBUILDER_COLORSPACE == 0
-  const static uint lut_texture_colorspace = CS_BT709;
-#else
-  const static uint lut_texture_colorspace = CS_BT2020;
-#endif
-#if CUSTOM_LUTBUILDER_COLORSPACE == 0 || LUTBUILDER_FAITHFUL == 1
   const static uint lutbuilder_colorspace = CS_BT709;
 #else
   const static uint lutbuilder_colorspace = CS_BT2020;
@@ -44,9 +34,6 @@ static struct TonemapStuffStruct {
   float3 colorTWithLens; //raw + lensflare
 
   float3 LutMinimumOutput; //Lut results sampled at (0,0,0)
-
-  float wideChromaRatio;
-  float2 wideHueRot;
 } TS;
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -66,78 +53,6 @@ float3 UCSFrom(float3 x, uint cs) {
     return Oklab::oklab_to_rgb(x, cs);
   #elif CUSTOM_UCS_TYPE == 2
     return renodx::color::ictcp::From(x, cs);
-  #endif
-}
-float3 WCG_LutToWorking(float3 lutColor) {
-  #if LUTBUILDER_FAITHFUL
-    return saturate(BT2020_To_BT709(lutColor));
-  #else
-    return lutColor;
-  #endif
-}
-
-void WCG_CaptureWide(float3 lut2020, float3 clipped709) {
-  TS.wideChromaRatio = 1.0;
-  TS.wideHueRot = float2(1.0, 0.0);
-  #if LUTBUILDER_FAITHFUL
-    float3 w = UCSTo(max(0, lut2020), CS_BT2020);
-    float3 c = UCSTo(BT709_To_BT2020(clipped709), CS_BT2020);
-    float cw = length(w.yz), cc = length(c.yz);
-    if (cc > 1e-5 && cw > cc) TS.wideChromaRatio = min(cw / cc, 4.0);
-    if (cc > 1e-5 && cw > 1e-5) {
-      float2 a = w.yz / cw, b = c.yz / cc;
-      TS.wideHueRot = float2(dot(a, b), b.x * a.y - b.y * a.x);
-    }
-  #endif
-}
-
-static const float3 WCG_LUMA709_W = float3(0.212599993, 0.715200007, 0.0722000003);
-static const float3 WCG_SKIN709 = float3(0.74, 0.41, 0.26);
-float3 WCG_Extend(float3 color709, float3 c2020) {
-  if (GS_WCGExpansion <= 0.0) return c2020;
-  const float Y = dot(color709, WCG_LUMA709_W);
-  if (Y <= 1e-6) return c2020;
-  const float3 d = color709 - Y;
-  float k709 = 1e9;
-  [unroll] for (int i = 0; i < 3; i++) if (d[i] < 0.0) k709 = min(k709, Y / -d[i]);
-  if (k709 >= 1e8) return c2020;
-  const float s = min(1.0 / k709, 1.0);
-  const float start = min(GS_WCGExpansionStart, 0.95);
-  if (s <= start) return c2020;
-  const float3 de = BT709_To_BT2020(Y + k709 * d) - Y;
-  float h = 1e9;
-  [unroll] for (int j = 0; j < 3; j++) if (de[j] < 0.0) h = min(h, Y / -de[j]);
-  h = clamp(h, 1.0, 1.5);
-  const float t = (s - start) / (1.0 - start);
-  const float gamma = 1.0 - 0.75 * saturate(GS_WCGSaturationLift);
-  const float sEdge = 1.0 + saturate(GS_WCGExpansion) * (h - 1.0);
-  float sNew = start + (sEdge - start) * pow(t, gamma);
-  {
-    static const float skinY = dot(WCG_SKIN709, WCG_LUMA709_W);
-    static const float3 skinDir = normalize(WCG_SKIN709 - skinY);
-    const float protect = smoothstep(0.94, 0.99, dot(normalize(d), skinDir));
-    sNew = lerp(sNew, s, saturate(GS_WCGSkinProtect) * protect);
-  }
-  const float g = sNew / s;
-  return max(0, Y + g * (c2020 - Y));
-}
-
-float3 WCG_ApplyWide(float3 color709) {
-  float3 c2020 = max(0, BT709_To_BT2020(color709));
-  #if LUTBUILDER_FAITHFUL
-      float ratio = TS.wideChromaRatio;
-      const float2 rot = TS.wideHueRot;
-    c2020 = WCG_Extend(color709, c2020);
-    if (ratio <= 1.0001 && abs(rot.y) < 1e-4) return c2020;
-    float3 u = UCSTo(c2020, CS_BT2020);
-    float2 yz = float2(u.y * rot.x - u.z * rot.y, u.y * rot.y + u.z * rot.x) * ratio;
-    u.yz = yz;
-    float3 wide = UCSFrom(u, CS_BT2020);
-    float s = 1.0;
-    [unroll] for (int i = 0; i < 3; i++) if (wide[i] < 0.0) s = min(s, c2020[i] / max(c2020[i] - wide[i], 1e-6));
-    return max(0, lerp(c2020, wide, saturate(s)));
-  #else
-    return c2020;
   #endif
 }
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -922,7 +837,7 @@ float3 LUT_Sample(float3 x, Texture3D lut, SamplerState lut_s) {
 }
 
 void LUT_WarmMinimum(Texture3D lut) {
-  TS.LutMinimumOutput = WCG_LutToWorking(lut.Load(int4(0, 0, 0, 0)).xyz);
+  TS.LutMinimumOutput = lut.Load(int4(0, 0, 0, 0)).xyz;
 }
 
 static float BloomAndLensHDRHeadRoom = 0.6f;
@@ -935,13 +850,8 @@ void LUT(Texture3D lut, SamplerState lut_s) {
   float3 colorN = TS.colorT;
   TS.colorT = LUT_Sample(TS.colorT, lut, lut_s);
   #if CUSTOM_SDR == 0
-    TS.colorTRawLUTed = WCG_LutToWorking(LUT_Sample(TS.colorTRaw * BloomAndLensHDRHeadRoom, lut, lut_s));
+    TS.colorTRawLUTed = LUT_Sample(TS.colorTRaw * BloomAndLensHDRHeadRoom, lut, lut_s);
   #endif
-  {
-    float3 lutRaw = TS.colorT;
-    TS.colorT = WCG_LutToWorking(TS.colorT);
-    WCG_CaptureWide(lutRaw, TS.colorT);
-  }
 
   //new minimum
   #if CUSTOM_BLACKFLOOR_LUT > 0
@@ -974,7 +884,7 @@ void LUT(Texture3D lut, SamplerState lut_s) {
 
   //mid gray change sampling
   const float mid = 0.5; //approx 0.18 in rec709
-  TS.colorU *= (GetLuminance(lut.Sample(lut_s, mid).xyz, lut_texture_colorspace) / mid) * (0.5f / 0.18f);
+  TS.colorU *= (GetLuminance(lut.Sample(lut_s, mid).xyz, lutbuilder_colorspace) / mid) * (0.5f / 0.18f);
 
   //lut resolve 0 (UpgradeToneMap crutch ahh ahh)
   TS.colorU = UpgradeToneMapBo3(TS.colorU, TS.colorT, colorN);
@@ -1220,15 +1130,10 @@ float TonemapGetLumaForAA(float3 color) {
 }
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 float3 TonemapHDRAndTradeIn(float3 colorU) {
-  #if LUTBUILDER_FAITHFUL && CUSTOM_SR == 1
-    const uint tm_cs = CS_BT2020;
-  #else
-    const uint tm_cs = lutbuilder_colorspace;
-  #endif
   //tonemap
   #if CUSTOM_TONEMAP > 0 && CUSTOM_SDR == 0 /* && CUSTOM_UPGRADE_DEBUG <= 1 */
     #if CUSTOM_TONEMAP_SCALING == 0
-      float l = GetLuminance(colorU, tm_cs); //luma
+      float l = GetLuminance(colorU, lutbuilder_colorspace); //luma
     #elif CUSTOM_TONEMAP_SCALING == 1
       float l = max(colorU.x, max(colorU.y, colorU.z)); //max channel
     #endif
@@ -1247,7 +1152,7 @@ float3 TonemapHDRAndTradeIn(float3 colorU) {
         #elif CUSTOM_TONEMAP == 2
           x = HermiteSpline::HermiteSplinePerChannelRolloff(x, HDR_PEAK, HDR_MAXEXPECTED);
         #endif
-        lT = GetLuminance(x, tm_cs);
+        lT = GetLuminance(x, lutbuilder_colorspace);
       #endif
       colorU *= lT / l;
     }
@@ -1260,10 +1165,6 @@ float3 TonemapHDRAndTradeIn(float3 colorU) {
         colorU = ClampByMaxChannel(colorU, HDR_PEAK);
       #endif
     #endif
-  #endif
-
-  #if LUTBUILDER_FAITHFUL && CUSTOM_SR == 0
-    colorU = WCG_ApplyWide(colorU);
   #endif
 
   //tradeoff intermediate scaling
@@ -1310,10 +1211,6 @@ void TonemapShader_Out(inout float3 o0) {
 
   //clamp against negative values for DLSS
   o0 = max(0, o0);
-
-  #if LUTBUILDER_FAITHFUL && CUSTOM_SR == 1
-    o0 = WCG_ApplyWide(o0);
-  #endif
 
   //Do HDR Tonemap and Tradeoff encoding if no SR (else delay until after to give as much info possible to SR)
   #if CUSTOM_SR == 0

@@ -2485,29 +2485,6 @@ namespace SectionedImGui
          ShaderDefineInfo::UIToggleCheckmark(ShaderDefineInfo::CUSTOM_LUTBUILDER_COLORSPACE, "LUT Builder BT2020",
             "Make the LUT Builder (and other stuff after) work in wider BT2020 to allow for wider colors from chrominance boosts.");
          WCGApplyDefines();
-         if (ShaderDefineInfo::GetB(ShaderDefineInfo::CUSTOM_LUTBUILDER_COLORSPACE))
-         {
-            ImGui::PushID("WCG: Expansion");
-            if (ImGui::SliderFloat("Expansion", &cb_luma_global_settings.GameSettings.WCGExpansion, 0.f, 1.f, "%.2f"))
-               reshade::set_config_value(runtime, NAME, "WCGExpansion", cb_luma_global_settings.GameSettings.WCGExpansion);
-            ImGui::PopID();
-            DrawResetButton(cb_luma_global_settings.GameSettings.WCGExpansion, default_luma_global_game_settings.WCGExpansion, "WCGExpansion", runtime);
-            ImGui::PushID("WCG: Saturation Lift");
-            if (ImGui::SliderFloat("Saturation Lift", &cb_luma_global_settings.GameSettings.WCGSaturationLift, 0.f, 1.f, "%.2f"))
-               reshade::set_config_value(runtime, NAME, "WCGSaturationLift", cb_luma_global_settings.GameSettings.WCGSaturationLift);
-            ImGui::PopID();
-            DrawResetButton(cb_luma_global_settings.GameSettings.WCGSaturationLift, default_luma_global_game_settings.WCGSaturationLift, "WCGSaturationLift", runtime);
-            ImGui::PushID("WCG: Expansion Start");
-            if (ImGui::SliderFloat("Protected Saturation", &cb_luma_global_settings.GameSettings.WCGExpansionStart, 0.f, 0.95f, "%.2f"))
-               reshade::set_config_value(runtime, NAME, "WCGExpansionStart", cb_luma_global_settings.GameSettings.WCGExpansionStart);
-            ImGui::PopID();
-            DrawResetButton(cb_luma_global_settings.GameSettings.WCGExpansionStart, default_luma_global_game_settings.WCGExpansionStart, "WCGExpansionStart", runtime);
-            ImGui::PushID("WCG: Skin Protect");
-            if (ImGui::SliderFloat("Skin Tone Protection", &cb_luma_global_settings.GameSettings.WCGSkinProtect, 0.f, 1.f, "%.2f"))
-               reshade::set_config_value(runtime, NAME, "WCGSkinProtect", cb_luma_global_settings.GameSettings.WCGSkinProtect);
-            ImGui::PopID();
-            DrawResetButton(cb_luma_global_settings.GameSettings.WCGSkinProtect, default_luma_global_game_settings.WCGSkinProtect, "WCGSkinProtect", runtime);
-         }
       }
 
       static void PerChannelCorrection(DeviceData& device_data, reshade::api::effect_runtime* runtime)
@@ -2877,10 +2854,6 @@ public:
       default_luma_global_game_settings.GammaPerceptualChrominanceCorrect = cb_luma_global_settings.GameSettings.GammaPerceptualChrominanceCorrect = 0.21f;
       default_luma_global_game_settings.MovPeakRatio = cb_luma_global_settings.GameSettings.MovPeakRatio = 1.f;
       default_luma_global_game_settings.MovShoulderPow = cb_luma_global_settings.GameSettings.MovShoulderPow = 3.6f;
-      default_luma_global_game_settings.WCGExpansion = cb_luma_global_settings.GameSettings.WCGExpansion = 1.0f;
-      default_luma_global_game_settings.WCGExpansionStart = cb_luma_global_settings.GameSettings.WCGExpansionStart = 0.35f;
-      default_luma_global_game_settings.WCGSkinProtect = cb_luma_global_settings.GameSettings.WCGSkinProtect = 0.9f;
-      default_luma_global_game_settings.WCGSaturationLift = cb_luma_global_settings.GameSettings.WCGSaturationLift = 0.5f;
       
       //MemoryHack
 #if ENABLE_SR == 1
@@ -3657,10 +3630,6 @@ public:
       reshade::get_config_value(runtime, NAME, "GammaPerceptualChrominanceCorrect", cb_luma_global_settings.GameSettings.GammaPerceptualChrominanceCorrect);
       reshade::get_config_value(runtime, NAME, "MovPeakRatio", cb_luma_global_settings.GameSettings.MovPeakRatio);
       reshade::get_config_value(runtime, NAME, "MovShoulderPow", cb_luma_global_settings.GameSettings.MovShoulderPow);
-      reshade::get_config_value(runtime, NAME, "WCGExpansion", cb_luma_global_settings.GameSettings.WCGExpansion);
-      reshade::get_config_value(runtime, NAME, "WCGExpansionStart", cb_luma_global_settings.GameSettings.WCGExpansionStart);
-      reshade::get_config_value(runtime, NAME, "WCGSkinProtect", cb_luma_global_settings.GameSettings.WCGSkinProtect);
-      reshade::get_config_value(runtime, NAME, "WCGSaturationLift", cb_luma_global_settings.GameSettings.WCGSaturationLift);
       ShadowPatch::enabled = true;
       reshade::get_config_value(runtime, NAME, "ShadowFixEnabled", ShadowPatch::enabled);
       EnginePrepass::Apply();
