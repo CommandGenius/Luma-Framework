@@ -61,6 +61,11 @@ namespace CB
         
         float MovPeakRatio;
         float MovShoulderPow;
+
+        float WCGExpansion;
+        float WCGExpansionStart;
+        float WCGSkinProtect;
+        float WCGSaturationLift;
     };
     #define GS_GammaInfluence LumaSettings.GameSettings.GammaInfluence
     #define GS_GammaPerceptualChrominanceCorrect LumaSettings.GameSettings.GammaPerceptualChrominanceCorrect
@@ -113,6 +118,11 @@ namespace CB
 
     #define GS_MovPeakRatio LumaSettings.GameSettings.MovPeakRatio
     #define GS_MovShoulderPow LumaSettings.GameSettings.MovShoulderPow
+
+    #define GS_WCGExpansion LumaSettings.GameSettings.WCGExpansion
+    #define GS_WCGExpansionStart LumaSettings.GameSettings.WCGExpansionStart
+    #define GS_WCGSkinProtect LumaSettings.GameSettings.WCGSkinProtect
+    #define GS_WCGSaturationLift LumaSettings.GameSettings.WCGSaturationLift
 #else
     struct LumaGameSettings
     {
@@ -191,6 +201,11 @@ namespace CB
 
     #define GS_MovPeakRatio 1
     #define GS_MovShoulderPow 0
+
+    #define GS_WCGExpansion 1.0
+    #define GS_WCGExpansionStart 0.35
+    #define GS_WCGSkinProtect 0.9
+    #define GS_WCGSaturationLift 0.5
 
     #ifndef __cplusplus
         // #if ((__SHADER_TARGET_MAJOR == 5 && __SHADER_TARGET_MINOR >= 1) || __SHADER_TARGET_MAJOR >= 6)
