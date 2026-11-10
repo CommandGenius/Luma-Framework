@@ -2753,7 +2753,7 @@ public:
          {"CUSTOM_RCAS", '0', true, false, "Enable Robust (4 instead of 8 samples) Contrast Adaptive Sharpening.", 1},
          {"RCAS_DENOISE", '0', true, false, "Denoising sharpening.\nMore smooth, but helps against dither pattern of shadows and AO.", 1},
          {"RCAS_LUMINANCE_BASED", '0', true, false, "Luma based sharpening. Apparently meh.", 1},
-         {"CUSTOM_LUTBUILDER_COLORSPACE", '0', true, false, "Change the LUT output (and other things after) to BT.2020 primaries for wider color from upgraded post processing reach final.", 1},
+         {"CUSTOM_LUTBUILDER_COLORSPACE", '1', true, false, "Change the LUT output (and other things after) to BT.2020 primaries for wider color from upgraded post processing reach final.", 1},
          {"CUSTOM_LUTBUILDER_VANILLA", '0', true, false, "Allow changing the strength of vanilla grading effects.", 1},
          {"CUSTOM_LUTBUILDER_NEUTRAL", '0', true, false, "If LUT texture color is desaturated, blend to neutral color.\n0 - Off.\n1 - If desaturated.\n2 - Forcefully.", 2 },
          {"CUSTOM_LUTBUILDER_NEUTRAL_LUMA", '0', true, false, "Neutral blend type.\n0 - High passed.\n1 - Forcefully.", 2 },
