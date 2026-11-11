@@ -1890,7 +1890,7 @@ namespace SectionedImGui
             "Toggle improved DoF");
          if (!dof_on) ImGui::BeginDisabled();
          ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_DOF_QUALITY, "DoF Quality",
-            {"4 Rings (80 samples, Vanilla)", "6 Rings (168 samples)", "8 Rings (288 samples)"},
+            {"4 Rings (Original)", "6 Rings", "8 Rings"},
             "Number of sample rings. Decreases ringing at a performance cost.");
          if (!dof_on) ImGui::EndDisabled();
          ShaderDefineInfo::UIToggleCheckmark(ShaderDefineInfo::CUSTOM_SMAA_REFERENCE, "Improved SMAA 1x",
@@ -1905,11 +1905,13 @@ namespace SectionedImGui
          {
             int taps_index = ShadowPatch::taps == 32 ? 2 : ShadowPatch::taps == 16 ? 1 : 0;
             ImGui::PushID("Shadows: Quality");
-            if (ImGui::Combo("Soft Shadow Quality", &taps_index, "8 Samples (Vanilla count)\0" "16 Samples\0" "32 Samples\0"))
+            if (ImGui::Combo("Soft Shadow Quality", &taps_index, "8 Samples (Original)\0" "16 Samples\0" "32 Samples\0"))
             {
                ShadowPatch::taps = taps_index == 2 ? 32 : taps_index == 1 ? 16 : 8;
                reshade::set_config_value(runtime, NAME, "ShadowKernelTaps", ShadowPatch::taps);
             }
+            ImGui::PopID();
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Soft shadow quality; The amount of samples for its filtering. Increase to try and reduce dithering at a performance cost.");
          }
          if (!ShadowPatch::enabled) ImGui::EndDisabled();
 
