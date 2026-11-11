@@ -3654,7 +3654,7 @@ public:
       ShadowPatch::enabled = true;
       reshade::get_config_value(runtime, NAME, "ShadowFixEnabled", ShadowPatch::enabled);
       reshade::get_config_value(runtime, NAME, "ShadowKernelTaps", ShadowPatch::taps);
-      if (ShadowPatch::taps != 8 && ShadowPatch::taps != 16 && ShadowPatch::taps != 32) ShadowPatch::taps = 32;
+      if (ShadowPatch::taps != 8 && ShadowPatch::taps != 16 && ShadowPatch::taps != 32) ShadowPatch::taps = 16;
       EnginePrepass::Apply();
       SectionedImGui::Templates::WCGApplyDefines();
 

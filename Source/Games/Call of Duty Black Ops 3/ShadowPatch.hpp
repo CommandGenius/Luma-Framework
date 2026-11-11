@@ -14,7 +14,7 @@
 namespace ShadowPatch
 {
    inline bool enabled = true;
-   inline int taps = 32;
+   inline int taps = 16;
    constexpr int rotation_mode = 1;
    inline std::atomic<uint32_t> patched_compute_shaders{ 0 };
    inline std::atomic<uint32_t> patched_pixel_shaders{ 0 };
