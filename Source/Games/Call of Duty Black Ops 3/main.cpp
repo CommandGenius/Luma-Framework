@@ -1912,6 +1912,7 @@ namespace SectionedImGui
             }
             ImGui::PopID();
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Soft shadow quality; The amount of samples for its filtering. Increase to try and reduce dithering at a performance cost.");
+            DrawResetButton(ShadowPatch::taps, 16, "ShadowKernelTaps", runtime);
          }
          if (!ShadowPatch::enabled) ImGui::EndDisabled();
 
