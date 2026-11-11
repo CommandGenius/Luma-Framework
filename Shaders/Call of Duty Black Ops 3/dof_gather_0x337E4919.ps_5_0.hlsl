@@ -873,7 +873,13 @@ void main(
   return;
 }
 #else
+#if CUSTOM_DOF_QUALITY == 2
+static const int DOF_MAX_RINGS = 8;
+#elif CUSTOM_DOF_QUALITY == 1
 static const int DOF_MAX_RINGS = 6;
+#else
+static const int DOF_MAX_RINGS = 4;
+#endif
 
 void main(
   float4 v0 : SV_POSITION0,

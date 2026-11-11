@@ -143,6 +143,7 @@ namespace ShaderDefineInfo
    constexpr uint32_t CUSTOM_TAA                       = char_ptr_crc32("CUSTOM_TAA");
    constexpr uint32_t CUSTOM_MB                        = char_ptr_crc32("CUSTOM_MB");
    constexpr uint32_t CUSTOM_DOF                       = char_ptr_crc32("CUSTOM_DOF");
+   constexpr uint32_t CUSTOM_DOF_QUALITY               = char_ptr_crc32("CUSTOM_DOF_QUALITY");
    constexpr uint32_t CUSTOM_SMAA_REFERENCE            = char_ptr_crc32("CUSTOM_SMAA_REFERENCE");
    
    static char InvertCharBool(char b)
@@ -1464,11 +1465,6 @@ namespace ForcedLODBias //TODO: other executables besides BO3Enhanced
       if (ImGui::IsItemHovered()) ImGui::SetTooltip("(Unverified, can't tell difference.)\nBias multiplier for model LOD. Higher values increase LOD of models at a distance.");
       DrawResetButton(r_modelLodBias, 1.f, "r_modelLodBias", runtime);
 
-      ImGui::PushID("Shadows: Enabled");
-      if (ImGui::Checkbox("Soft Shadows", &ShadowPatch::enabled))
-         reshade::set_config_value(runtime, NAME, "ShadowFixEnabled", ShadowPatch::enabled);
-      ImGui::PopID();
-      if (ImGui::IsItemHovered()) ImGui::SetTooltip("Toggle Shadow Dither/Filtering. (The game heavily relies on this!)");
       ImGui::Separator();
    }
 }
@@ -1890,10 +1886,32 @@ namespace SectionedImGui
             "Toggle improved temporal AA.");
          ShaderDefineInfo::UIToggleCheckmark(ShaderDefineInfo::CUSTOM_MB, "Improved Motion Blur",
             "Toggle improved motion blur.");
-         ShaderDefineInfo::UIToggleCheckmark(ShaderDefineInfo::CUSTOM_DOF, "Improved Depth of Field",
+         bool dof_on = ShaderDefineInfo::UIToggleCheckmark(ShaderDefineInfo::CUSTOM_DOF, "Improved Depth of Field",
             "Toggle improved DoF");
+         if (!dof_on) ImGui::BeginDisabled();
+         ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_DOF_QUALITY, "DoF Quality",
+            {"4 Rings (80 samples, Vanilla)", "6 Rings (168 samples)", "8 Rings (288 samples)"},
+            "Number of sample rings. Decreases ringing at a performance cost.");
+         if (!dof_on) ImGui::EndDisabled();
          ShaderDefineInfo::UIToggleCheckmark(ShaderDefineInfo::CUSTOM_SMAA_REFERENCE, "Improved SMAA 1x",
             "Toggle improved SMAA 1x");
+
+         ImGui::PushID("Shadows: Enabled");
+         if (ImGui::Checkbox("Soft Shadows", &ShadowPatch::enabled))
+            reshade::set_config_value(runtime, NAME, "ShadowFixEnabled", ShadowPatch::enabled);
+         ImGui::PopID();
+         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Toggle Shadow Dither/Filtering. (The game heavily relies on this!)");
+         if (!ShadowPatch::enabled) ImGui::BeginDisabled();
+         {
+            int taps_index = ShadowPatch::taps == 32 ? 2 : ShadowPatch::taps == 16 ? 1 : 0;
+            ImGui::PushID("Shadows: Quality");
+            if (ImGui::Combo("Soft Shadow Quality", &taps_index, "8 Samples (Vanilla count)\0" "16 Samples\0" "32 Samples\0"))
+            {
+               ShadowPatch::taps = taps_index == 2 ? 32 : taps_index == 1 ? 16 : 8;
+               reshade::set_config_value(runtime, NAME, "ShadowKernelTaps", ShadowPatch::taps);
+            }
+         }
+         if (!ShadowPatch::enabled) ImGui::EndDisabled();
 
 #if ENABLE_SR == 1
          ImGui::Separator();
@@ -2771,6 +2789,7 @@ public:
          {"CUSTOM_TAA", '1', true, false, "Better SMAA T2x temporal resolve", 1},
          {"CUSTOM_MB", '1', true, false, "Better motion blur", 1},
          {"CUSTOM_DOF", '1', true, false, "Less noisy DoF", 1},
+         {"CUSTOM_DOF_QUALITY", '1', true, false, "Number of sample rings. Decreases ringing at a performance cost.\n0 - 4 rings (80 samples, vanilla)\n1 - 6 rings (168 samples)\n2 - 8 rings (288 samples)", 2},
          {"CUSTOM_SMAA_REFERENCE", '1', true, false, "Modern SMAA", 1},
          {"CUSTOM_SR", ENABLE_SR == 1 ? '1' : '0', true, false, "(AUTOMATICALLY HANDLED) Recompiles SMAA T2X (not filmic) according to SR type.", 1},
          {"CUSTOM_SDR", '0', true, false, "(AUTOMATICALLY HANDLED) Turn off FSFX HDR tradeoff encoding stuff.", 1},
@@ -3632,6 +3651,8 @@ public:
       reshade::get_config_value(runtime, NAME, "MovShoulderPow", cb_luma_global_settings.GameSettings.MovShoulderPow);
       ShadowPatch::enabled = true;
       reshade::get_config_value(runtime, NAME, "ShadowFixEnabled", ShadowPatch::enabled);
+      reshade::get_config_value(runtime, NAME, "ShadowKernelTaps", ShadowPatch::taps);
+      if (ShadowPatch::taps != 8 && ShadowPatch::taps != 16 && ShadowPatch::taps != 32) ShadowPatch::taps = 32;
       EnginePrepass::Apply();
       SectionedImGui::Templates::WCGApplyDefines();
 
