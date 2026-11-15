@@ -1889,7 +1889,7 @@ namespace SectionedImGui
             "Toggle improved DoF");
          if (!dof_on) ImGui::BeginDisabled();
          ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_DOF_QUALITY, "DoF Quality",
-            {"4 Rings (Original)", "6 Rings", "8 Rings"},
+            {"4 Rings (Original)", "6 Rings", "8 Rings (High)", "10 Rings", "12 Rings", "16 Rings", "20 Rings (Uhhh)"},
             "Number of sample rings. Decreases ringing at a performance cost.");
          if (!dof_on) ImGui::EndDisabled();
          ShaderDefineInfo::UIToggleCheckmark(ShaderDefineInfo::CUSTOM_SMAA_REFERENCE, "Improved SMAA 1x",
@@ -1902,11 +1902,12 @@ namespace SectionedImGui
          if (ImGui::IsItemHovered()) ImGui::SetTooltip("Toggle Shadow Dither/Filtering. (The game heavily relies on this!)");
          if (!ShadowPatch::enabled) ImGui::BeginDisabled();
          {
-            int taps_index = ShadowPatch::taps == 32 ? 2 : ShadowPatch::taps == 16 ? 1 : 0;
+            int taps_index = 1;
+            for (int i = 0; i < IM_ARRAYSIZE(ShadowPatch::TAP_OPTIONS); i++) if (ShadowPatch::TAP_OPTIONS[i] == ShadowPatch::taps) taps_index = i;
             ImGui::PushID("Shadows: Quality");
-            if (ImGui::Combo("Soft Shadow Quality", &taps_index, "8 Samples (Original)\0" "16 Samples\0" "32 Samples\0"))
+            if (ImGui::Combo("Soft Shadow Quality", &taps_index, "8 Samples (Original)\0" "16 Samples\0" "24 Samples (High)\0" "32 Samples\0" "48 Samples\0" "64 Samples\0" "128 Samples (Uhhh)\0"))
             {
-               ShadowPatch::taps = taps_index == 2 ? 32 : taps_index == 1 ? 16 : 8;
+               ShadowPatch::taps = ShadowPatch::TAP_OPTIONS[taps_index];
                reshade::set_config_value(runtime, NAME, "ShadowKernelTaps", ShadowPatch::taps);
             }
             ImGui::PopID();
@@ -2791,7 +2792,7 @@ public:
          {"CUSTOM_TAA", '1', true, false, "Better SMAA T2x temporal resolve", 1},
          {"CUSTOM_MB", '1', true, false, "Better motion blur", 1},
          {"CUSTOM_DOF", '1', true, false, "Less noisy DoF", 1},
-         {"CUSTOM_DOF_QUALITY", '1', true, false, "Number of sample rings. Decreases ringing at a performance cost.\n0 - 4 rings (80 samples, vanilla)\n1 - 6 rings (168 samples)\n2 - 8 rings (288 samples)", 2},
+         {"CUSTOM_DOF_QUALITY", '1', true, false, "Number of sample rings. Decreases ringing at a performance cost.\n0 - 4 rings (80 samples, vanilla)\n1 - 6 rings (168 samples)\n2 - 8 rings (288 samples)\n3 - 10 rings (440 samples)\n4 - 12 rings (624 samples)\n5 - 16 rings (1088 samples)\n6 - 20 rings (1680 samples)", 6},
          {"CUSTOM_SMAA_REFERENCE", '1', true, false, "Modern SMAA", 1},
          {"CUSTOM_SR", ENABLE_SR == 1 ? '1' : '0', true, false, "(AUTOMATICALLY HANDLED) Recompiles SMAA T2X (not filmic) according to SR type.", 1},
          {"CUSTOM_SDR", '0', true, false, "(AUTOMATICALLY HANDLED) Turn off FSFX HDR tradeoff encoding stuff.", 1},
@@ -3654,7 +3655,7 @@ public:
       ShadowPatch::enabled = true;
       reshade::get_config_value(runtime, NAME, "ShadowFixEnabled", ShadowPatch::enabled);
       reshade::get_config_value(runtime, NAME, "ShadowKernelTaps", ShadowPatch::taps);
-      if (ShadowPatch::taps != 8 && ShadowPatch::taps != 16 && ShadowPatch::taps != 32) ShadowPatch::taps = 16;
+      if (!ShadowPatch::IsValidTapCount(ShadowPatch::taps)) ShadowPatch::taps = 16;
       EnginePrepass::Apply();
       SectionedImGui::Templates::WCGApplyDefines();
 

@@ -14,6 +14,8 @@
 namespace ShadowPatch
 {
    inline bool enabled = true;
+   constexpr int TAP_OPTIONS[] = { 8, 16, 24, 32, 48, 64, 128 };
+   constexpr bool IsValidTapCount(int n) { for (int o : TAP_OPTIONS) if (o == n) return true; return false; }
    inline int taps = 16;
    constexpr int rotation_mode = 1;
    inline std::atomic<uint32_t> patched_compute_shaders{ 0 };
@@ -263,7 +265,7 @@ namespace ShadowPatch
       }
       if (base < 0) return fail("vanilla kernel not found in the icb");
 
-      uint32_t taps = (requested_taps == 32) ? 32 : (requested_taps == 16) ? 16 : 8;
+      uint32_t taps = IsValidTapCount(requested_taps) ? uint32_t(requested_taps) : 16u;
       const bool extend = (taps > 8 && entries == uint32_t(base) + 8);
       if (taps > 8 && !extend) taps = 8;
       std::vector<uint32_t> new_vals(words.begin() + vals_start, words.begin() + vals_start + 4 * size_t(base));

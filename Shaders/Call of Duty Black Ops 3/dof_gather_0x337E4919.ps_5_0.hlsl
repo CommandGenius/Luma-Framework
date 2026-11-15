@@ -873,7 +873,15 @@ void main(
   return;
 }
 #else
-#if CUSTOM_DOF_QUALITY == 2
+#if CUSTOM_DOF_QUALITY == 6
+static const int DOF_MAX_RINGS = 20;
+#elif CUSTOM_DOF_QUALITY == 5
+static const int DOF_MAX_RINGS = 16;
+#elif CUSTOM_DOF_QUALITY == 4
+static const int DOF_MAX_RINGS = 12;
+#elif CUSTOM_DOF_QUALITY == 3
+static const int DOF_MAX_RINGS = 10;
+#elif CUSTOM_DOF_QUALITY == 2
 static const int DOF_MAX_RINGS = 8;
 #elif CUSTOM_DOF_QUALITY == 1
 static const int DOF_MAX_RINGS = 6;
