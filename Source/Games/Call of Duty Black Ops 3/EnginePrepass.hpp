@@ -136,7 +136,6 @@ namespace EnginePrepass
       buffers[1].reserve(SELECTABLE_LISTS + 8);
       status = Status::Ready;
       status_text = std::format("prepass table found at BlackOps3.exe+{:#x} (routine at +{:#x})", reinterpret_cast<uintptr_t>(candidate) - base, hit - base);
-      reshade::log::message(reshade::log::level::info, ("EnginePrepass: " + status_text).c_str());
       return true;
    }
 
@@ -150,7 +149,6 @@ namespace EnginePrepass
             WriteEntry(&table[PREPASS_TYPE], original.entries, original.count, false);
             applied = false;
             applied_count = original.count;
-            reshade::log::message(reshade::log::level::info, "EnginePrepass: vanilla prepass list restored");
          }
          return false;
       }
@@ -172,7 +170,6 @@ namespace EnginePrepass
       live_buffer ^= 1u;
       applied = true;
       applied_count = uint32_t(next.size());
-      reshade::log::message(reshade::log::level::info, std::format("EnginePrepass: PREPASS now draws {} surface lists (mask {:#x})", applied_count, list_mask).c_str());
       return true;
    }
 }

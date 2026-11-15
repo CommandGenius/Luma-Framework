@@ -23,7 +23,7 @@ namespace ShadowPatch
 
    namespace
    {
-      constexpr uint32_t OP_DP2 = 15, OP_ENDLOOP = 22, OP_IGE = 33, OP_LOOP = 48, OP_MAD = 50, OP_CUSTOMDATA = 53, OP_MOV = 54, OP_SAMPLE_C_LZ = 71, OP_SINCOS = 77, OP_UGE = 80;
+      constexpr uint32_t OP_DP2 = 15, OP_ENDLOOP = 22, OP_IGE = 33, OP_ILT = 34, OP_LOOP = 48, OP_MAD = 50, OP_CUSTOMDATA = 53, OP_MOV = 54, OP_MUL = 56, OP_SAMPLE_C_LZ = 71, OP_SINCOS = 77, OP_ULT = 79, OP_UGE = 80;
       constexpr uint32_t OT_TEMP = 0, OT_IMM32 = 4, OT_IMM64 = 5, OT_CBUFFER = 8, OT_ICB = 9;
       constexpr uint32_t CUSTOMDATA_CLASS_ICB = 3;
 
@@ -164,9 +164,25 @@ namespace ShadowPatch
          return out;
       }
 
+      bool SrcScalar(const Operand& o, int64_t& reg, uint32_t& comp)
+      {
+         reg = o.TempReg();
+         if (reg < 0 || (o.sel != 1 && o.sel != 2)) return false;
+         comp = o.swz & 3;
+         return true;
+      }
+      bool DstScalar(const Operand& o, int64_t& reg, uint32_t& comp)
+      {
+         reg = o.TempReg();
+         if (reg < 0 || o.sel != 0) return false;
+         const uint32_t mask = o.swz & 0xF;
+         if (mask == 0 || (mask & (mask - 1)) != 0) return false;
+         comp = uint32_t(std::countr_zero(mask));
+         return true;
+      }
+
       std::vector<uint32_t> MakeMul(const std::vector<uint32_t>& words, const Operand& dst, const Operand& src0, const Operand& src1)
       {
-         constexpr uint32_t OP_MUL = 56;
          std::vector<uint32_t> out;
          const uint32_t length = uint32_t(1 + (dst.end - dst.start) + (src0.end - src0.start) + (src1.end - src1.start));
          out.push_back(OP_MUL | (length << 24));
@@ -195,6 +211,7 @@ namespace ShadowPatch
       std::vector<uint32_t> words;
       uint32_t loops = 0;
       uint32_t angle_producers = 0;
+      uint32_t cascade_fixes = 0;
       uint32_t taps = 0;
       uint32_t icb_entries_before = 0;
       uint32_t icb_entries_after = 0;
@@ -256,6 +273,7 @@ namespace ShadowPatch
       std::map<size_t, std::vector<uint32_t>> edits;
       std::vector<size_t> stack;
       uint32_t patched_loops = 0;
+      uint32_t cascade_fixes = 0;
       for (size_t idx = 0; idx < insns.size(); idx++)
       {
          const auto& ins = insns[idx];
@@ -301,6 +319,45 @@ namespace ShadowPatch
                for (const auto& o : x.operands)
                   if (o.IsImm32(f.old_bits)) ws[o.start + 1 - x.start] = f.new_bits;
                edits[f.k] = std::move(ws);
+            }
+
+            int64_t counter_reg = -1; uint32_t counter_comp = 0;
+            for (size_t oi = 1; oi < insns[bound[0]].operands.size() && counter_reg < 0; oi++)
+               if (!SrcScalar(insns[bound[0]].operands[oi], counter_reg, counter_comp)) counter_reg = -1;
+            if (counter_reg < 0) return fail("shadow loop counter not found");
+            for (size_t k = a + 1; k < b; k++)
+            {
+               const auto& x = insns[k];
+               if (k == bound[0] || x.operands.size() != 3) continue;
+               if (x.op != OP_ULT && x.op != OP_ILT && x.op != OP_UGE && x.op != OP_IGE) continue;
+               int64_t r1 = -1, r2 = -1; uint32_t c1 = 0, c2 = 0;
+               if (!SrcScalar(x.operands[1], r1, c1) || !SrcScalar(x.operands[2], r2, c2)) continue;
+               int64_t thr_reg; uint32_t thr_comp;
+               if (r2 == counter_reg && c2 == counter_comp) { thr_reg = r1; thr_comp = c1; }
+               else if (r1 == counter_reg && c1 == counter_comp) { thr_reg = r2; thr_comp = c2; }
+               else continue;
+               bool fixed = false;
+               for (size_t p = a; p-- > 0 && a - p <= 96;)
+               {
+                  const auto& y = insns[p];
+                  if (y.op == OP_LOOP || y.op == OP_ENDLOOP) break;
+                  if (y.op != OP_MUL || y.operands.size() != 3) continue;
+                  int64_t dr = -1; uint32_t dc = 0;
+                  if (!DstScalar(y.operands[0], dr, dc) || dr != thr_reg || dc != thr_comp) continue;
+                  const Operand* imm = nullptr;
+                  for (size_t oi = 1; oi < 3; oi++)
+                     if (y.operands[oi].type == OT_IMM32 && y.operands[oi].imm_count == 1) imm = &y.operands[oi];
+                  if (!imm) return fail("cascade threshold producer has no immediate scale");
+                  const float scale = U2F(imm->imm[0]);
+                  if (!(scale > 1.f && scale < 1000.f)) return fail("unexpected cascade threshold scale");
+                  std::vector<uint32_t> ws(words.begin() + y.start, words.begin() + y.end);
+                  ws[imm->start + 1 - y.start] = F2U(scale * float(taps) / 8.f);
+                  edits[p] = std::move(ws);
+                  fixed = true;
+                  break;
+               }
+               if (!fixed) return fail("cascade threshold producer not found");
+               cascade_fixes++;
             }
          }
          patched_loops++;
@@ -350,6 +407,7 @@ namespace ShadowPatch
       }
       r.loops = patched_loops;
       r.angle_producers = angles;
+      r.cascade_fixes = cascade_fixes;
       r.taps = taps;
       r.icb_entries_before = entries;
       r.icb_entries_after = uint32_t(new_vals.size() / 4);
@@ -365,12 +423,10 @@ namespace ShadowPatch
       if (!HasVanillaKernel(words_ptr, count)) return nullptr;
 
       std::vector<uint32_t> words(words_ptr, words_ptr + count);
-      std::string why;
-      auto result = Patch(words, taps, rotation_mode, &why);
+      auto result = Patch(words, taps, rotation_mode);
       if (!result)
       {
          failed_shaders++;
-         reshade::log::message(reshade::log::level::warning, std::format("ShadowPatch: shader {:08X} carries the vanilla shadow kernel but was not patched: {}", uint32_t(shader_hash), why).c_str());
          return nullptr;
       }
 
@@ -382,8 +438,6 @@ namespace ShadowPatch
       if (type == reshade::api::pipeline_subobject_type::compute_shader) patched_compute_shaders++;
       else patched_pixel_shaders++;
       if (result->taps < uint32_t(taps)) patched_shaders_8_taps++;
-      reshade::log::message(reshade::log::level::info, std::format("ShadowPatch: {} shader {:08X} patched ({} shadow loops, {} angle producers, icb {} -> {} entries, {} taps, rotation mode {}, {} -> {} dwords)",
-         type == reshade::api::pipeline_subobject_type::compute_shader ? "compute" : "pixel", uint32_t(shader_hash), result->loops, result->angle_producers, result->icb_entries_before, result->icb_entries_after, result->taps, rotation_mode, count, result->words.size()).c_str());
       return out;
    }
 }

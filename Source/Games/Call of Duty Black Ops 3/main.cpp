@@ -654,7 +654,6 @@ namespace RenderingFixes
             scratch.Reset();
             return false;
          }
-         message(reshade::log::level::info, std::format("RenderingFixes: motion blur scratch texture created ({}x{}, format {})", rt_desc.Width, rt_desc.Height, static_cast<uint>(rt_desc.Format)).c_str());
       }
 
       original_draw();

@@ -329,12 +329,6 @@ namespace SMAAReference
          r.replaced = Run(device, ctx, device_data, r, out_uav.get());
          if (!r.replaced)
          {
-            static bool warned = false;
-            if (!warned)
-            {
-               reshade::log::message(reshade::log::level::warning, "SMAAReference: could not run the reference SMAA passes, SMAA 1x is disabled for this frame");
-               warned = true;
-            }
          }
       }
       skipped_dispatches++;

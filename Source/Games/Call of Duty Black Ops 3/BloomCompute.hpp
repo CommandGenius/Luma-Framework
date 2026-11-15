@@ -100,14 +100,7 @@ namespace BloomCompute
       if (level == 0) return;
       const size_t pass_index = size_t(Pass::BlurX1) + (level - 1);
       uint32_t expected = 0;
-      if (detected_hashes[pass_index].compare_exchange_strong(expected, shader_hash) || expected == shader_hash)
-      {
-         reshade::log::message(reshade::log::level::info, std::format("BloomCompute: pixel shader {:08X} identified as bloom horizontal mip blur level {} ({} taps)", shader_hash, level, sample_ops).c_str());
-      }
-      else
-      {
-         reshade::log::message(reshade::log::level::warning, std::format("BloomCompute: pixel shader {:08X} also looks like bloom horizontal mip blur level {} (already {:08X}), ignored", shader_hash, level, expected).c_str());
-      }
+      detected_hashes[pass_index].compare_exchange_strong(expected, shader_hash);
    }
 
    template<typename DefinitionsMap>
