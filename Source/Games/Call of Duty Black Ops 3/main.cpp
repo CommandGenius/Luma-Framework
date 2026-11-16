@@ -677,6 +677,7 @@ namespace RenderingFixes
    static bool OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, DeviceData& device_data, CallOfDutyBlackOps3GameDeviceData& game_device_data, uint32_t ps, uint32_t cs, std::function<void()>* original_draw_dispatch_func)
    {
       DepthCopySkip::OnDrawOrDispatch(native_device_context, cs != 0);
+      ShadowPatch::BindShadowResources(native_device, native_device_context, ps, cs);
 
       if (cs != 0 && SMAAReference::IsSMAA1xHash(cs) && ShaderDefineInfo::GetB(ShaderDefineInfo::CUSTOM_SMAA_REFERENCE))
       {
@@ -1902,7 +1903,7 @@ namespace SectionedImGui
          if (ImGui::IsItemHovered()) ImGui::SetTooltip("Toggle Shadow Dither/Filtering. (The game heavily relies on this!)");
          if (!ShadowPatch::enabled) ImGui::BeginDisabled();
          {
-            int taps_index = 1;
+            int taps_index = 0;
             for (int i = 0; i < IM_ARRAYSIZE(ShadowPatch::TAP_OPTIONS); i++) if (ShadowPatch::TAP_OPTIONS[i] == ShadowPatch::taps) taps_index = i;
             ImGui::PushID("Shadows: Quality");
             if (ImGui::Combo("Soft Shadow Quality", &taps_index, "8 Samples (Original)\0" "16 Samples\0" "24 Samples (High)\0" "32 Samples\0" "48 Samples\0" "64 Samples\0" "128 Samples (Uhhh)\0"))
@@ -1912,7 +1913,7 @@ namespace SectionedImGui
             }
             ImGui::PopID();
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Soft shadow quality; The amount of samples for its filtering. Increase to try and reduce dithering at a performance cost.");
-            DrawResetButton(ShadowPatch::taps, 16, "ShadowKernelTaps", runtime);
+            DrawResetButton(ShadowPatch::taps, 8, "ShadowKernelTaps", runtime);
          }
          if (!ShadowPatch::enabled) ImGui::EndDisabled();
 
@@ -2792,7 +2793,7 @@ public:
          {"CUSTOM_TAA", '1', true, false, "Better SMAA T2x temporal resolve", 1},
          {"CUSTOM_MB", '1', true, false, "Better motion blur", 1},
          {"CUSTOM_DOF", '1', true, false, "Less noisy DoF", 1},
-         {"CUSTOM_DOF_QUALITY", '1', true, false, "Number of sample rings. Decreases ringing at a performance cost.\n0 - 4 rings (80 samples, vanilla)\n1 - 6 rings (168 samples)\n2 - 8 rings (288 samples)\n3 - 10 rings (440 samples)\n4 - 12 rings (624 samples)\n5 - 16 rings (1088 samples)\n6 - 20 rings (1680 samples)", 6},
+         {"CUSTOM_DOF_QUALITY", '0', true, false, "Number of sample rings. Decreases ringing at a performance cost.\n0 - 4 rings (80 samples, vanilla)\n1 - 6 rings (168 samples)\n2 - 8 rings (288 samples)\n3 - 10 rings (440 samples)\n4 - 12 rings (624 samples)\n5 - 16 rings (1088 samples)\n6 - 20 rings (1680 samples)", 6},
          {"CUSTOM_SMAA_REFERENCE", '1', true, false, "Modern SMAA", 1},
          {"CUSTOM_SR", ENABLE_SR == 1 ? '1' : '0', true, false, "(AUTOMATICALLY HANDLED) Recompiles SMAA T2X (not filmic) according to SR type.", 1},
          {"CUSTOM_SDR", '0', true, false, "(AUTOMATICALLY HANDLED) Turn off FSFX HDR tradeoff encoding stuff.", 1},
@@ -3537,6 +3538,7 @@ public:
    void OnPresent(ID3D11Device* native_device, DeviceData& device_data) override
    {
       auto& game_device_data = CallOfDutyBlackOps3GameDeviceData::GetGameDeviceData(device_data);
+      OnPresentShadowPatch(device_data);
 
       //sr enabled?
       const bool sr_enabled = device_data.sr_type != SR::Type::None;
@@ -3599,8 +3601,14 @@ public:
    {
       auto& game_device_data = CallOfDutyBlackOps3GameDeviceData::GetGameDeviceData(device_data);
       game_device_data.OnPresentRenderingFixes();
+      OnPresentShadowPatch(device_data);
    }
 #endif
+
+   void OnPresentShadowPatch(DeviceData& device_data)
+   {
+      ShadowPatch::OnPresent();
+   }
 
    void LoadConfigs() override
    {
@@ -3655,7 +3663,7 @@ public:
       ShadowPatch::enabled = true;
       reshade::get_config_value(runtime, NAME, "ShadowFixEnabled", ShadowPatch::enabled);
       reshade::get_config_value(runtime, NAME, "ShadowKernelTaps", ShadowPatch::taps);
-      if (!ShadowPatch::IsValidTapCount(ShadowPatch::taps)) ShadowPatch::taps = 16;
+      if (!ShadowPatch::IsValidTapCount(ShadowPatch::taps)) ShadowPatch::taps = 8;
       EnginePrepass::Apply();
       SectionedImGui::Templates::WCGApplyDefines();
 

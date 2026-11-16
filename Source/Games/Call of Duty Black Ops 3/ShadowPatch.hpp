@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <atomic>
 #include <bit>
 #include <cmath>
@@ -10,23 +11,43 @@
 #include <optional>
 #include <string>
 #include <vector>
+#include <mutex>
+#include <shared_mutex>
+#include <unordered_set>
+#include <d3d11.h>
+#include <wrl/client.h>
+#include "ShadowNoise.hpp"
 
 namespace ShadowPatch
 {
    inline bool enabled = true;
    constexpr int TAP_OPTIONS[] = { 8, 16, 24, 32, 48, 64, 128 };
    constexpr bool IsValidTapCount(int n) { for (int o : TAP_OPTIONS) if (o == n) return true; return false; }
-   inline int taps = 16;
-   constexpr int rotation_mode = 1;
+   inline int taps = 8;
+   constexpr int rotation_mode = 3;
    inline std::atomic<uint32_t> patched_compute_shaders{ 0 };
    inline std::atomic<uint32_t> patched_pixel_shaders{ 0 };
    inline std::atomic<uint32_t> patched_shaders_8_taps{ 0 };
    inline std::atomic<uint32_t> failed_shaders{ 0 };
+   inline std::shared_mutex patched_mutex;
+   inline std::unordered_set<uint32_t> patched_hashes;
+
+   inline bool IsPatched(uint32_t shader_hash)
+   {
+      if (shader_hash == 0) return false;
+      const std::shared_lock lock(patched_mutex);
+      return patched_hashes.contains(shader_hash);
+   }
 
    namespace
    {
-      constexpr uint32_t OP_DP2 = 15, OP_ENDLOOP = 22, OP_IGE = 33, OP_ILT = 34, OP_LOOP = 48, OP_MAD = 50, OP_CUSTOMDATA = 53, OP_MOV = 54, OP_MUL = 56, OP_SAMPLE_C_LZ = 71, OP_SINCOS = 77, OP_ULT = 79, OP_UGE = 80;
-      constexpr uint32_t OT_TEMP = 0, OT_IMM32 = 4, OT_IMM64 = 5, OT_CBUFFER = 8, OT_ICB = 9;
+      constexpr uint32_t OP_AND = 1, OP_DP2 = 15, OP_ENDLOOP = 22, OP_FTOU = 28, OP_IF = 31, OP_IGE = 33, OP_ILT = 34, OP_LD = 45, OP_LOOP = 48, OP_MAD = 50, OP_CUSTOMDATA = 53, OP_MOV = 54, OP_MUL = 56, OP_SAMPLE_C_LZ = 71, OP_SINCOS = 77, OP_ULT = 79, OP_UGE = 80;
+      constexpr uint32_t OP_DCL_RESOURCE = 88, OP_DCL_TEMPS = 104, OP_DCL_RESOURCE_RAW = 161, OP_DCL_RESOURCE_STRUCTURED = 162;
+      constexpr uint32_t OT_TEMP = 0, OT_IMM32 = 4, OT_IMM64 = 5, OT_RESOURCE = 7, OT_CBUFFER = 8, OT_ICB = 9;
+      constexpr uint32_t NOISE_SLOT = 127;
+      constexpr uint32_t CONST_SLOT = 126;
+      constexpr uint32_t KERNEL_TAPS = 128;
+      constexpr uint32_t IGN_X_BITS = 0x3D897143u;
       constexpr uint32_t CUSTOMDATA_CLASS_ICB = 3;
 
       constexpr uint32_t F2U(float f) { return std::bit_cast<uint32_t>(f); }
@@ -194,6 +215,29 @@ namespace ShadowPatch
          return out;
       }
 
+      std::vector<uint32_t> MakeNoiseAngle(const std::vector<uint32_t>& words, const Operand& dst, const Operand& pos, uint32_t scratch)
+      {
+         std::vector<uint32_t> out;
+         auto temp = [&](uint32_t token) { out.push_back(token); out.push_back(scratch); };
+         out.push_back(OP_FTOU | (uint32_t(1 + 2 + (pos.end - pos.start)) << 24));
+         temp(0x00100032u);
+         out.insert(out.end(), words.begin() + pos.start, words.begin() + pos.end);
+         out.push_back(OP_AND | (10u << 24));
+         temp(0x00100032u); temp(0x00100046u);
+         out.insert(out.end(), { 0x00004002u, ShadowNoise::WIDTH - 1, ShadowNoise::HEIGHT - 1, 0u, 0u });
+         out.push_back(OP_MOV | (8u << 24));
+         temp(0x001000C2u);
+         out.insert(out.end(), { 0x00004002u, 0u, 0u, 0u, 0u });
+         out.insert(out.end(), { OP_LD | (9u << 24) | 0x80000000u, 0x800000C2u, 0x00155543u });
+         temp(0x00100012u); temp(0x00100E46u);
+         out.insert(out.end(), { 0x00107E46u, NOISE_SLOT });
+         out.push_back(OP_MUL | (uint32_t(1 + (dst.end - dst.start) + 2 + 2) << 24));
+         out.insert(out.end(), words.begin() + dst.start, words.begin() + dst.end);
+         temp(0x0010000Au);
+         out.insert(out.end(), { 0x00004001u, TWO_PI_BITS });
+         return out;
+      }
+
       void Vogel(uint32_t n, std::vector<uint32_t>& out_xy00, double scale = 1.1)
       {
          for (uint32_t i = 0; i < n; i++)
@@ -214,6 +258,7 @@ namespace ShadowPatch
       uint32_t loops = 0;
       uint32_t angle_producers = 0;
       uint32_t cascade_fixes = 0;
+      uint32_t flag_forced = 0;
       uint32_t taps = 0;
       uint32_t icb_entries_before = 0;
       uint32_t icb_entries_after = 0;
@@ -265,17 +310,52 @@ namespace ShadowPatch
       }
       if (base < 0) return fail("vanilla kernel not found in the icb");
 
-      uint32_t taps = IsValidTapCount(requested_taps) ? uint32_t(requested_taps) : 16u;
-      const bool extend = (taps > 8 && entries == uint32_t(base) + 8);
-      if (taps > 8 && !extend) taps = 8;
+      (void)requested_taps;
+      const bool extend = (entries == uint32_t(base) + 8);
+      uint32_t taps = extend ? KERNEL_TAPS : 8u;
       std::vector<uint32_t> new_vals(words.begin() + vals_start, words.begin() + vals_start + 4 * size_t(base));
       Vogel(taps, new_vals);
       new_vals.insert(new_vals.end(), words.begin() + vals_start + 4 * (size_t(base) + 8), words.begin() + icb->end);
 
       std::map<size_t, std::vector<uint32_t>> edits;
+
+      size_t dcl_temps_idx = SIZE_MAX, last_dcl_resource = SIZE_MAX, first_code = SIZE_MAX;
+      uint32_t sreg = 0;
+      for (size_t idx = 0; idx < insns.size(); idx++)
+      {
+         const auto& x = insns[idx];
+         if (x.op == OP_DCL_TEMPS && x.end - x.start == 2) { dcl_temps_idx = idx; sreg = words[x.start + 1]; }
+         if (x.op == OP_DCL_RESOURCE || x.op == OP_DCL_RESOURCE_RAW || x.op == OP_DCL_RESOURCE_STRUCTURED)
+         {
+            if (!x.operands.empty() && x.operands[0].type == OT_RESOURCE && x.operands[0].index_count >= 1 && (x.operands[0].indices[0].value == NOISE_SLOT || x.operands[0].indices[0].value == CONST_SLOT)) return fail("noise / constant texture slot already used");
+            if (x.op == OP_DCL_RESOURCE) last_dcl_resource = idx;
+         }
+         if (first_code == SIZE_MAX && x.op < OP_DCL_RESOURCE && x.op != OP_CUSTOMDATA) first_code = idx;
+      }
+      if (dcl_temps_idx == SIZE_MAX || last_dcl_resource == SIZE_MAX || first_code == SIZE_MAX || sreg >= 4095) return fail("declarations for the shadow constants not found");
+      const uint32_t creg = sreg + 1;
+      edits[dcl_temps_idx] = { words[insns[dcl_temps_idx].start], sreg + 2 };
+      {
+         std::vector<uint32_t> decl(words.begin() + insns[last_dcl_resource].start, words.begin() + insns[last_dcl_resource].end);
+         decl.insert(decl.end(), { 0x04001858u, 0x00107000u, CONST_SLOT, 0x00005555u });
+         decl.insert(decl.end(), { 0x04001858u, 0x00107000u, NOISE_SLOT, 0x00005555u });
+         edits[last_dcl_resource] = std::move(decl);
+      }
+      if (extend)
+      {
+         std::vector<uint32_t> load = {
+            OP_MOV | (8u << 24), 0x001000F2u, creg, 0x00004002u, 0u, 0u, 0u, 0u,
+            OP_LD | (9u << 24) | 0x80000000u, 0x800000C2u, 0x00155543u, 0x001000F2u, creg, 0x00100E46u, creg, 0x00107E46u, CONST_SLOT,
+            OP_FTOU | (5u << 24), 0x00100012u, creg, 0x0010000Au, creg };
+         load.insert(load.end(), words.begin() + insns[first_code].start, words.begin() + insns[first_code].end);
+         edits[first_code] = std::move(load);
+      }
+      auto c_select = [&](std::vector<uint32_t>& ws, size_t pos, uint32_t comp) { ws[pos] = 0x0010000Au | (comp << 4); ws[pos + 1] = creg; };
+
       std::vector<size_t> stack;
       uint32_t patched_loops = 0;
       uint32_t cascade_fixes = 0;
+      std::vector<size_t> loop_starts;
       for (size_t idx = 0; idx < insns.size(); idx++)
       {
          const auto& ins = insns[idx];
@@ -311,17 +391,23 @@ namespace ShadowPatch
                for (const auto& o : x.operands) if (o.IsImm32(WEIGHT_8_BITS)) { weight.push_back(k); break; }
          }
          if (bound.size() != 1 || weight.size() != 1) return fail("shadow loop bound/weight not found");
-         if (taps > 8)
+         if (extend)
          {
-            const struct { size_t k; uint32_t old_bits, new_bits; } fixes[2] = { { bound[0], 8u, taps }, { weight[0], WEIGHT_8_BITS, F2U(1.0f / float(taps)) } };
+            const struct { size_t k; uint32_t old_bits, comp; } fixes[2] = { { bound[0], 8u, 0u }, { weight[0], WEIGHT_8_BITS, 1u } };
             for (const auto& f : fixes)
             {
                const auto& x = insns[f.k];
                std::vector<uint32_t> ws(words.begin() + x.start, words.begin() + x.end);
                for (const auto& o : x.operands)
-                  if (o.IsImm32(f.old_bits)) ws[o.start + 1 - x.start] = f.new_bits;
+                  if (o.IsImm32(f.old_bits)) c_select(ws, o.start - x.start, f.comp);
                edits[f.k] = std::move(ws);
             }
+            int64_t d1 = -1, d2 = -1; uint32_t m1 = 0, m2 = 0;
+            if (!DstScalar(insns[dp2[0]].operands[0], d1, m1) || !DstScalar(insns[dp2[1]].operands[0], d2, m2) || d1 != d2) return fail("shadow loop kernel offsets not in one register");
+            const uint32_t mask = (1u << m1) | (1u << m2);
+            std::vector<uint32_t> ws2(words.begin() + insns[dp2[1]].start, words.begin() + insns[dp2[1]].end);
+            ws2.insert(ws2.end(), { OP_MUL | (7u << 24), 0x00100002u | (mask << 4), uint32_t(d1), 0x00100E46u, uint32_t(d1), 0x00100FF6u, creg });
+            edits[dp2[1]] = std::move(ws2);
 
             int64_t counter_reg = -1; uint32_t counter_comp = 0;
             for (size_t oi = 1; oi < insns[bound[0]].operands.size() && counter_reg < 0; oi++)
@@ -353,7 +439,7 @@ namespace ShadowPatch
                   const float scale = U2F(imm->imm[0]);
                   if (!(scale > 1.f && scale < 1000.f)) return fail("unexpected cascade threshold scale");
                   std::vector<uint32_t> ws(words.begin() + y.start, words.begin() + y.end);
-                  ws[imm->start + 1 - y.start] = F2U(scale * float(taps) / 8.f);
+                  c_select(ws, imm->start - y.start, 2u);
                   edits[p] = std::move(ws);
                   fixed = true;
                   break;
@@ -363,8 +449,89 @@ namespace ShadowPatch
             }
          }
          patched_loops++;
+         loop_starts.push_back(a);
       }
       if (patched_loops == 0) return fail("no shadow loops");
+
+      uint32_t flag_forced = 0;
+      {
+         auto cb_words = [&](const Operand& o) { return std::vector<uint32_t>(words.begin() + o.start, words.begin() + o.end); };
+         auto writes_comp = [&](const Operand& o, int64_t reg, uint32_t comp) { return o.TempReg() == reg && o.sel == 0 && ((o.swz & 0xF) & (1u << comp)) != 0; };
+         auto trace_flag = [&](size_t if_idx) -> std::vector<uint32_t>
+         {
+            const Operand* o = &insns[if_idx].operands[0];
+            size_t from = if_idx;
+            for (int hop = 0; hop < 4; hop++)
+            {
+               if (o->type == OT_CBUFFER) return cb_words(*o);
+               int64_t reg = -1; uint32_t comp = 0;
+               if (!SrcScalar(*o, reg, comp)) return {};
+               const Operand* src = nullptr;
+               for (size_t p = from; p-- > 0;)
+               {
+                  const auto& y = insns[p];
+                  if (y.operands.empty() || !writes_comp(y.operands[0], reg, comp)) continue;
+                  if (y.op != OP_MOV || y.operands.size() != 2) return {};
+                  src = &y.operands[1];
+                  from = p;
+                  break;
+               }
+               if (!src) return {};
+               o = src;
+            }
+            return {};
+         };
+         std::vector<uint32_t> flag_words;
+         for (size_t a : loop_starts)
+         {
+            for (size_t p = a; p-- > 0 && a - p <= 40;)
+            {
+               const auto& y = insns[p];
+               if (y.op == OP_LOOP || y.op == OP_ENDLOOP) break;
+               if (y.op != OP_IF || y.operands.size() != 1) continue;
+               std::vector<uint32_t> w = trace_flag(p);
+               if (!w.empty())
+               {
+                  if (flag_words.empty()) flag_words = w;
+                  else if (flag_words != w) return fail("shadow loops test different flags");
+               }
+               break;
+            }
+         }
+         if (flag_words.empty())
+         {
+            for (const auto& x : insns)
+            {
+               if (x.op != OP_IF && x.op != OP_MOV) continue;
+               for (size_t oi = (x.op == OP_MOV ? 1 : 0); oi < x.operands.size(); oi++)
+               {
+                  const auto& o = x.operands[oi];
+                  if (o.type == OT_CBUFFER && o.index_count == 2 && o.indices[0].kind == Index::Imm && o.indices[1].kind == Index::Imm && o.indices[0].value == 2 && o.indices[1].value == 58 && o.sel == 2 && (o.swz & 3) == 1)
+                  {
+                     flag_words = cb_words(o);
+                     break;
+                  }
+               }
+               if (!flag_words.empty()) break;
+            }
+         }
+         if (flag_words.empty()) return fail("shadow filtering flag not found");
+         auto is_flag = [&](const Operand& o) { return o.end - o.start == flag_words.size() && std::equal(flag_words.begin(), flag_words.end(), words.begin() + o.start); };
+         for (size_t idx = 0; idx < insns.size(); idx++)
+         {
+            const auto& x = insns[idx];
+            if (!((x.op == OP_IF && x.operands.size() == 1 && is_flag(x.operands[0])) || (x.op == OP_MOV && x.operands.size() == 2 && is_flag(x.operands[1])))) continue;
+            if (edits.contains(idx)) return fail("shadow filtering flag instruction already edited");
+            std::vector<uint32_t> ws;
+            const size_t keep = (x.op == OP_MOV) ? x.operands[1].start : x.operands[0].start;
+            ws.insert(ws.end(), words.begin() + x.start, words.begin() + keep);
+            ws.push_back(0x00004001u);
+            ws.push_back(0x3F800000u);
+            ws[0] = (ws[0] & ~(0x7Fu << 24)) | (uint32_t(ws.size()) << 24);
+            edits[idx] = std::move(ws);
+            flag_forced++;
+         }
+      }
 
       uint32_t angles = 0;
       for (size_t idx = 0; idx < insns.size(); idx++)
@@ -383,6 +550,21 @@ namespace ShadowPatch
          if (!feeds_sincos) continue;
          if (rotation == 0) edits[idx] = MakeMovImm(words, x.operands[0], F2U(0.f));
          else if (rotation == 1) edits[idx] = MakeMul(words, x.operands[0], x.operands[1], x.operands[2]);
+         else if (rotation == 3)
+         {
+            const Operand* pos = nullptr;
+            for (size_t k = idx; k-- > 0 && idx - k <= 8;)
+            {
+               const auto& y = insns[k];
+               if (y.op == OP_DP2 && y.operands.size() == 3 && y.operands[2].type == OT_IMM32 && y.operands[2].imm_count == 4 && y.operands[2].imm[0] == IGN_X_BITS && y.operands[0].TempReg() == x.operands[1].TempReg())
+               {
+                  pos = &y.operands[1];
+                  break;
+               }
+            }
+            if (!pos) return fail("gradient noise position not found");
+            edits[idx] = MakeNoiseAngle(words, x.operands[0], *pos, sreg);
+         }
          angles++;
       }
       if (angles == 0) return fail("dither angle producer not found");
@@ -410,6 +592,7 @@ namespace ShadowPatch
       r.loops = patched_loops;
       r.angle_producers = angles;
       r.cascade_fixes = cascade_fixes;
+      r.flag_forced = flag_forced;
       r.taps = taps;
       r.icb_entries_before = entries;
       r.icb_entries_after = uint32_t(new_vals.size() / 4);
@@ -440,6 +623,72 @@ namespace ShadowPatch
       if (type == reshade::api::pipeline_subobject_type::compute_shader) patched_compute_shaders++;
       else patched_pixel_shaders++;
       if (result->taps < uint32_t(taps)) patched_shaders_8_taps++;
+      {
+         const std::unique_lock lock(patched_mutex);
+         patched_hashes.insert(uint32_t(shader_hash));
+      }
       return out;
+   }
+
+   inline std::atomic<uint32_t> noise_frame{ 0 };
+   inline std::mutex noise_mutex;
+   inline ID3D11Device* noise_device = nullptr;
+   inline Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> noise_srvs[ShadowNoise::FRAMES];
+   inline Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> const_srvs[std::size(TAP_OPTIONS)];
+   inline bool noise_failed = false;
+
+   inline void OnPresent() { noise_frame.fetch_add(1, std::memory_order_relaxed); }
+
+   inline bool EnsureNoise(ID3D11Device* device)
+   {
+      std::lock_guard lock(noise_mutex);
+      if (noise_device == device) return !noise_failed;
+      for (auto& srv : noise_srvs) srv.Reset();
+      for (auto& srv : const_srvs) srv.Reset();
+      noise_device = device;
+      noise_failed = false;
+      auto give_up = [&]() { for (auto& srv : noise_srvs) srv.Reset(); for (auto& srv : const_srvs) srv.Reset(); noise_failed = true; return false; };
+      D3D11_TEXTURE2D_DESC desc = {};
+      desc.Width = ShadowNoise::WIDTH;
+      desc.Height = ShadowNoise::HEIGHT;
+      desc.MipLevels = 1;
+      desc.ArraySize = 1;
+      desc.Format = DXGI_FORMAT_R8_UNORM;
+      desc.SampleDesc.Count = 1;
+      desc.Usage = D3D11_USAGE_IMMUTABLE;
+      desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+      for (uint32_t f = 0; f < ShadowNoise::FRAMES; f++)
+      {
+         D3D11_SUBRESOURCE_DATA init = { ShadowNoise::DATA[f], ShadowNoise::WIDTH, 0 };
+         Microsoft::WRL::ComPtr<ID3D11Texture2D> tex;
+         if (FAILED(device->CreateTexture2D(&desc, &init, &tex)) || FAILED(device->CreateShaderResourceView(tex.Get(), nullptr, &noise_srvs[f]))) return give_up();
+      }
+      D3D11_TEXTURE2D_DESC cdesc = desc;
+      cdesc.Width = 1;
+      cdesc.Height = 1;
+      cdesc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+      for (size_t i = 0; i < std::size(TAP_OPTIONS); i++)
+      {
+         const float n = float(TAP_OPTIONS[i]);
+         const float values[4] = { n, 1.f / n, 28.f * n / 8.f, std::sqrt(float(KERNEL_TAPS) / n) };
+         D3D11_SUBRESOURCE_DATA init = { values, sizeof(values), 0 };
+         Microsoft::WRL::ComPtr<ID3D11Texture2D> tex;
+         if (FAILED(device->CreateTexture2D(&cdesc, &init, &tex)) || FAILED(device->CreateShaderResourceView(tex.Get(), nullptr, &const_srvs[i]))) return give_up();
+      }
+      return true;
+   }
+
+   inline void BindShadowResources(ID3D11Device* device, ID3D11DeviceContext* context, uint32_t ps_hash, uint32_t cs_hash)
+   {
+      if (!enabled || device == nullptr || context == nullptr) return;
+      const bool cs = cs_hash != 0 && IsPatched(cs_hash);
+      const bool ps = !cs && ps_hash != 0 && IsPatched(ps_hash);
+      if (!cs && !ps) return;
+      if (!EnsureNoise(device)) return;
+      size_t option = 0;
+      for (size_t i = 0; i < std::size(TAP_OPTIONS); i++) if (TAP_OPTIONS[i] == taps) option = i;
+      ID3D11ShaderResourceView* srvs[2] = { const_srvs[option].Get(), noise_srvs[noise_frame.load(std::memory_order_relaxed) % ShadowNoise::FRAMES].Get() };
+      if (cs) context->CSSetShaderResources(CONST_SLOT, 2, srvs);
+      else context->PSSetShaderResources(CONST_SLOT, 2, srvs);
    }
 }
